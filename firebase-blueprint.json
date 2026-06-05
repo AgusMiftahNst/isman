@@ -1,0 +1,120 @@
+{
+  "entities": {
+    "Account": {
+      "title": "Account",
+      "description": "User account for the risk management system",
+      "type": "object",
+      "properties": {
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "role": { "type": "string", "enum": ["Administrator", "Operator", "User"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["username", "password", "role", "createdAt"]
+    },
+    "RiskIdentification": {
+      "title": "Risk Identification",
+      "description": "Risk identification record",
+      "type": "object",
+      "properties": {
+        "tujuan": { "type": "string" },
+        "indikator": { "type": "string" },
+        "risikoUraian": { "type": "string" },
+        "risikoKode": { "type": "string" },
+        "pemilik": { "type": "string" },
+        "sebabUraian": { "type": "string" },
+        "sebabSumber": { "type": "string" },
+        "control": { "type": "string" },
+        "dampakUraian": { "type": "string" },
+        "dampakPihak": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "createdByUid": { "type": "string" }
+      }
+    },
+    "RiskContext": {
+      "title": "Risk Context",
+      "description": "Context setting for risk assessment",
+      "type": "object",
+      "properties": {
+        "namaPemda": { "type": "string" },
+        "tahunPenilaian": { "type": "string" },
+        "periodeRenstra": { "type": "string" },
+        "urusanPemerintahan": { "type": "string" },
+        "opdDinilai": { "type": "string" },
+        "sumberData": { "type": "string" },
+        "tujuanStrategis": { "type": "string" },
+        "informasiLain": { "type": "string" },
+        "ttdTempat": { "type": "string" },
+        "ttdBulan": { "type": "string" },
+        "ttdJabatan": { "type": "string" },
+        "ttdNama": { "type": "string" },
+        "ttdPangkat": { "type": "string" },
+        "ttdNip": { "type": "string" }
+      }
+    },
+    "RiskAnalysisItem": {
+      "title": "Risk Analysis Item",
+      "description": "Item in risk analysis (dampak or kemungkinan)",
+      "type": "object",
+      "properties": {
+        "kode": { "type": "string" },
+        "uraian": { "type": "string" },
+        "scores": { "type": "array", "items": { "type": "number" } },
+        "type": { "type": "string", "enum": ["dampak", "kemungkinan"] },
+        "createdBy": { "type": "string" }
+      }
+    },
+    "RiskEvaluationItem": {
+      "title": "Risk Evaluation Item",
+      "description": "Item in risk evaluation",
+      "type": "object",
+      "properties": {
+        "kode": { "type": "string" },
+        "uraian": { "type": "string" },
+        "dampak": { "type": "number" },
+        "kemungkinan": { "type": "number" },
+        "createdBy": { "type": "string" }
+      }
+    },
+    "FinalDocument": {
+      "title": "Final Document",
+      "description": "Final document submission and verification status",
+      "type": "object",
+      "properties": {
+        "link": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "verified", "rejected"] },
+        "username": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "updatedBy": { "type": "string" },
+        "verifiedAt": { "type": "string", "format": "date-time" },
+        "verifiedBy": { "type": "string" }
+      }
+    }
+  },
+  "firestore": {
+    "accounts/{username}": {
+      "schema": "Account",
+      "description": "User accounts"
+    },
+    "risk_identification/{docId}": {
+      "schema": "RiskIdentification",
+      "description": "Risk identification records"
+    },
+    "risk_context/{contextId}": {
+      "schema": "RiskContext",
+      "description": "Context settings (global or per-user)"
+    },
+    "risk_analysis/{docId}": {
+      "schema": "RiskAnalysisItem",
+      "description": "Risk analysis items"
+    },
+    "risk_evaluation/{docId}": {
+      "schema": "RiskEvaluationItem",
+      "description": "Risk evaluation items"
+    },
+    "final_documents/{userId}": {
+      "schema": "FinalDocument",
+      "description": "Final document links and verification status"
+    }
+  }
+}
