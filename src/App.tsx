@@ -1372,12 +1372,12 @@ export default function App() {
           // Draw Heatmap Grid
           for (let row = 1; row <= 5; row++) {
             for (let col = 1; col <= 5; col++) {
-              const rL = getRiskLevel(6 - row, col);
+              const rL = getRiskLevel(col, 6 - row);
               let fill = [220, 220, 220]; // Default
               if (rL.label === 'Sangat Tinggi') fill = [220, 38, 38]; // red-600
-              else if (rL.label === 'Tinggi') fill = [245, 158, 11]; // amber-500
-              else if (rL.label === 'Sedang') fill = [250, 204, 21]; // yellow-400
-              else if (rL.label === 'Rendah') fill = [34, 197, 94]; // green-500
+              else if (rL.label === 'Tinggi') fill = [250, 204, 21]; // yellow-400
+              else if (rL.label === 'Rendah') fill = [59, 130, 246]; // blue-500
+              else if (rL.label === 'Sangat Rendah') fill = [34, 197, 94]; // green-500
               
               docPDF.setFillColor(fill[0], fill[1], fill[2]);
               docPDF.rect(startX + (col - 1) * cellSize, startY + (row - 1) * cellSize, cellSize, cellSize, 'F');
@@ -1388,8 +1388,8 @@ export default function App() {
           
           // Axis Labels
           docPDF.setFontSize(8).setFont('helvetica', 'bold').setTextColor(100, 100, 100);
-          docPDF.text('IMPACT (DAMPAK)', startX - 5, startY + gridSize / 2, { angle: 90, align: 'center' });
-          docPDF.text('PROBABILITY (KEMUNGKINAN)', startX + gridSize / 2, startY + gridSize + 8, { align: 'center' });
+          docPDF.text('KEMUNGKINAN (PROBABILITY)', startX - 5, startY + gridSize / 2, { angle: 90, align: 'center' });
+          docPDF.text('DAMPAK (IMPACT)', startX + gridSize / 2, startY + gridSize + 8, { align: 'center' });
           
           // Numbers on Axis
           for (let i = 1; i <= 5; i++) {
@@ -1402,8 +1402,8 @@ export default function App() {
             const d = Math.max(1, Math.min(5, Math.ceil(r.avgD)));
             const k = Math.max(1, Math.min(5, Math.ceil(r.avgK)));
             
-            const dotX = startX + (k - 1) * cellSize + cellSize / 2;
-            const dotY = startY + (5 - d) * cellSize + cellSize / 2;
+            const dotX = startX + (d - 1) * cellSize + cellSize / 2;
+            const dotY = startY + (5 - k) * cellSize + cellSize / 2;
             
             docPDF.setFillColor(15, 23, 42); // slate-900
             docPDF.circle(dotX, dotY, 3, 'F');
@@ -1435,9 +1435,9 @@ export default function App() {
           
           const legends = [
             { l: 'Sangat Tinggi', c: [220, 38, 38] },
-            { l: 'Tinggi', c: [245, 158, 11] },
-            { l: 'Sedang', c: [250, 204, 21] },
-            { l: 'Rendah', c: [34, 197, 94] }
+            { l: 'Tinggi', c: [250, 204, 21] },
+            { l: 'Rendah', c: [59, 130, 246] },
+            { l: 'Sangat Rendah', c: [34, 197, 94] }
           ];
           
           legends.forEach((lg, i) => {
@@ -4107,38 +4107,45 @@ function RiskAnalysisView({ user, isReadOnly, riskType }: { user: any, isReadOnl
   );
 }
 
-// Matrix logic based on the user's provided PNG (Matriks Analisa Risiko Pergub 67 Tahun 2023)
+// Matrix logic based on the user's provided PDF (Peraturan Bupati Mimika Nomor 76 Tahun 2022)
 const getRiskLevel = (d: number, k: number) => {
   // Rounds to nearest floor/ceil for matrix mapping (1-5 scale)
-  const D = Math.ceil(d);
-  const K = Math.ceil(k);
+  const D = Math.max(1, Math.min(5, Math.ceil(d)));
+  const K = Math.max(1, Math.min(5, Math.ceil(k)));
   
-  // Matrix definitions
+  const SR = { label: 'Sangat Rendah', color: 'bg-green-500 text-white', level: 1 };
+  const R  = { label: 'Rendah', color: 'bg-blue-500 text-white', level: 2 };
+  const T  = { label: 'Tinggi', color: 'bg-yellow-400 text-slate-900', level: 3 };
+  const ST = { label: 'Sangat Tinggi', color: 'bg-red-600 text-white', level: 4 };
+
+  // Matrix definitions based on 5x5 exact coordination in the uploaded image:
+  // K = 5 (Sangat Sering)
   if (K === 5) {
-    if (D <= 2) return { label: 'Tinggi', color: 'bg-amber-500 text-white', level: 3 };
-    return { label: 'Sangat Tinggi', color: 'bg-red-600 text-white', level: 4 };
+    if (D === 1) return R;
+    if (D === 2) return T;
+    return ST; // D = 3, 4, 5
   }
+  // K = 4 (Sering)
   if (K === 4) {
-    if (D === 1) return { label: 'Sedang', color: 'bg-yellow-400 text-slate-900', level: 2 };
-    if (D === 2 || D === 3) return { label: 'Tinggi', color: 'bg-amber-500 text-white', level: 3 };
-    return { label: 'Sangat Tinggi', color: 'bg-red-600 text-white', level: 4 };
+    if (D === 1 || D === 2) return R;
+    if (D === 3) return T;
+    return ST; // D = 4, 5
   }
+  // K = 3 (Moderat)
   if (K === 3) {
-    if (D <= 2) return { label: 'Sedang', color: 'bg-yellow-400 text-slate-900', level: 2 };
-    if (D === 3 || D === 4) return { label: 'Tinggi', color: 'bg-amber-500 text-white', level: 3 };
-    return { label: 'Sangat Tinggi', color: 'bg-red-600 text-white', level: 4 };
+    if (D === 1 || D === 2) return R;
+    if (D === 3 || D === 4) return T;
+    return ST; // D = 5
   }
+  // K = 2 (Jarang)
   if (K === 2) {
-    if (D <= 2) return { label: 'Rendah', color: 'bg-green-500 text-white', level: 1 }; // (1,2) and (2,2) are now Green (Rendah)
-    if (D === 3) return { label: 'Sedang', color: 'bg-yellow-400 text-slate-900', level: 2 };
-    return { label: 'Tinggi', color: 'bg-amber-500 text-white', level: 3 };
+    if (D === 1) return SR;
+    if (D === 2 || D === 3 || D === 4) return R;
+    return T; // D = 5
   }
-  if (K === 1) {
-    if (D <= 2) return { label: 'Rendah', color: 'bg-green-500 text-white', level: 1 };
-    if (D === 3 || D === 4) return { label: 'Sedang', color: 'bg-yellow-400 text-slate-900', level: 2 };
-    return { label: 'Tinggi', color: 'bg-amber-500 text-white', level: 3 };
-  }
-  return { label: 'N/A', color: 'bg-slate-100', level: 0 };
+  // K = 1 (Sangat Jarang)
+  if (D === 1 || D === 2) return SR;
+  return R;
 };
 
 
@@ -4850,9 +4857,9 @@ function RiskMapView({ user, riskType }: { user: any, riskType: 'strategis' | 'o
   }, [fetchMapData]);
 
   const cells = Array.from({ length: 25 }, (_, i) => {
-    const row = 5 - Math.floor(i / 5); // Impact (D)
-    const col = (i % 5) + 1; // Likelihood (K)
-    const risk = getRiskLevel(row, col);
+    const row = 5 - Math.floor(i / 5); // Kemungkinan (K)
+    const col = (i % 5) + 1; // Dampak (D)
+    const risk = getRiskLevel(col, row);
     
     return { row, col, color: risk.color };
   });
@@ -4877,7 +4884,7 @@ function RiskMapView({ user, riskType }: { user: any, riskType: 'strategis' | 'o
           <div className="flex gap-4 flex-1">
             {/* Label Y */}
             <div className="flex flex-col justify-between py-12">
-              <span className="text-[10px] font-black uppercase -rotate-90 origin-center whitespace-nowrap text-slate-400">Impact (Dampak)</span>
+              <span className="text-[10px] font-black uppercase -rotate-90 origin-center whitespace-nowrap text-slate-400">Kemungkinan (Probability)</span>
             </div>
             
             <div className="flex-1">
@@ -4885,7 +4892,7 @@ function RiskMapView({ user, riskType }: { user: any, riskType: 'strategis' | 'o
                 {cells.map((cell, idx) => (
                   <div key={idx} className={`${cell.color} border border-slate-900/10 flex items-center justify-center relative shadow-inner overflow-hidden`}>
                     <div className="flex flex-wrap gap-1 p-1 justify-center">
-                      {rows.filter(r => r.avgDampak === cell.row && r.avgKemungkinan === cell.col).map((r, rIdx) => (
+                      {rows.filter(r => r.avgKemungkinan === cell.row && r.avgDampak === cell.col).map((r, rIdx) => (
                         <div 
                           key={r.id} 
                           className="w-6 h-6 bg-slate-900 text-white rounded-full flex items-center justify-center border-2 border-white shadow-xl text-[8px] font-bold"
@@ -4901,7 +4908,7 @@ function RiskMapView({ user, riskType }: { user: any, riskType: 'strategis' | 'o
               </div>
               {/* Label X */}
               <div className="mt-4 flex justify-center">
-                <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Probability (Kemungkinan)</span>
+                <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Dampak (Impact)</span>
               </div>
             </div>
           </div>
@@ -4929,9 +4936,9 @@ function RiskMapView({ user, riskType }: { user: any, riskType: 'strategis' | 'o
               <h5 className="text-[10px] font-bold uppercase mb-2 text-slate-500">Keterangan Level</h5>
               <div className="space-y-2">
                 <div className="flex items-center gap-2"><div className="w-3 h-3 bg-red-600 rounded-sm" /> <span className="text-[9px] uppercase font-bold text-slate-600">Sangat Tinggi</span></div>
-                <div className="flex items-center gap-2"><div className="w-3 h-3 bg-amber-500 rounded-sm" /> <span className="text-[9px] uppercase font-bold text-slate-600">Tinggi</span></div>
-                <div className="flex items-center gap-2"><div className="w-3 h-3 bg-yellow-400 rounded-sm" /> <span className="text-[9px] uppercase font-bold text-slate-600">Sedang</span></div>
-                <div className="flex items-center gap-2"><div className="w-3 h-3 bg-green-500 rounded-sm border border-slate-200" /> <span className="text-[9px] uppercase font-bold text-slate-600">Rendah</span></div>
+                <div className="flex items-center gap-2"><div className="w-3 h-3 bg-yellow-400 rounded-sm" /> <span className="text-[9px] uppercase font-bold text-slate-600">Tinggi</span></div>
+                <div className="flex items-center gap-2"><div className="w-3 h-3 bg-blue-500 rounded-sm" /> <span className="text-[9px] uppercase font-bold text-slate-600">Rendah</span></div>
+                <div className="flex items-center gap-2"><div className="w-3 h-3 bg-green-500 rounded-sm border border-slate-200" /> <span className="text-[9px] uppercase font-bold text-slate-600">Sangat Rendah</span></div>
               </div>
             </div>
           </div>
