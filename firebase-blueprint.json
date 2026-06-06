@@ -21,6 +21,7 @@
         "indikator": { "type": "string" },
         "risikoUraian": { "type": "string" },
         "risikoKode": { "type": "string" },
+        "jenisRisiko": { "type": "string", "enum": ["Risiko Non-Fraud", "Risiko Fraud"] },
         "pemilik": { "type": "string" },
         "sebabUraian": { "type": "string" },
         "sebabSumber": { "type": "string" },
