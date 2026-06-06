@@ -14,7 +14,7 @@ import {
   RefreshCcw, 
   RotateCw,
   ClipboardList, 
-  Map, 
+  Map as MapIcon, 
   Users, 
   FileText,
   Menu,
@@ -203,7 +203,7 @@ const MENU_ITEMS_BASE: MenuItem[] = [
   { id: 5, title: 'V. RENCANA PENANGANAN (RTP)', icon: RefreshCcw },
   { id: 6, title: 'VI. KOMUNIKASI PENGENDALIAN', icon: ClipboardList },
   { id: 7, title: 'VII. RENCANA MONITORING PI', icon: FileText },
-  { id: 8, title: 'VIII. PETA RISIKO (HEATMAP)', icon: Map },
+  { id: 8, title: 'VIII. PETA RISIKO (HEATMAP)', icon: MapIcon },
   { id: 9, title: 'IX. MONITORING KETERJADIAN', icon: Users },
   { id: 10, title: 'X. DOKUMEN FINAL', icon: ShieldCheck },
   { id: 11, title: 'XI. MANAJEMEN AKUN', icon: LayoutDashboard },
@@ -233,6 +233,7 @@ export default function App() {
   const [selectedRiskType, setSelectedRiskType] = useState<'strategis' | 'operasional' | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [accounts, setAccounts] = useState<any[]>([]);
+  const [globalDbError, setGlobalDbError] = useState<string | null>(null);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [newPassword, setNewPassword] = useState('');
@@ -388,9 +389,16 @@ export default function App() {
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const accs = snapshot.docs.map(doc => ({ ...doc.data(), uid: doc.id }));
       setAccounts(accs);
+      setGlobalDbError(null);
     }, (error) => {
       console.error('Firestore Realtime Error (accounts):', error);
-      handleFirestoreError(error, OperationType.GET, 'accounts');
+      setGlobalDbError(error.message || 'Missing or insufficient permissions');
+      try {
+        handleFirestoreError(error, OperationType.GET, 'accounts');
+      } catch (err) {
+        // Suppress unhandled bubble to prevent React runtime crash screen in the browser
+        console.warn("Handled onSnapshot firestore error gracefully:", err);
+      }
     });
 
     return () => unsubscribe();
@@ -1497,6 +1505,10 @@ export default function App() {
     setActiveMenu(0);
   };
 
+  const handleMenuChange = (targetMenuId: number) => {
+    setActiveMenu(targetMenuId);
+  };
+
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setChangePassError('');
@@ -1624,7 +1636,7 @@ export default function App() {
           {menuItems.map((item) => (
             <button
               key={item.id}
-              onClick={() => setActiveMenu(item.id)}
+              onClick={() => handleMenuChange(item.id)}
               className={`w-full flex items-center gap-3 p-3 rounded-lg transition-all text-sm font-medium ${
                 activeMenu === item.id 
                   ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' 
@@ -1729,20 +1741,43 @@ export default function App() {
                </button>
             </div>
 
-            {!isActuallyReadOnly && (
-              <>
-                {activeMenu === 2 ? null : activeMenu !== 0 && activeMenu !== 8 && activeMenu !== 10 && (
-                  <button className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors flex items-center gap-2">
-                    <Plus size={16} />
-                    Tambah Data
-                  </button>
-                )}
-              </>
-            )}
+
           </div>
         </header>
 
         <section className="flex-1 overflow-y-auto p-8">
+          {globalDbError && (
+            <div className="max-w-7xl mx-auto mb-6 p-4 bg-amber-50 border border-amber-200 rounded-xl space-y-2 text-amber-800 text-[13px] leading-relaxed">
+              <p className="font-bold flex items-center gap-1.5 text-amber-950">
+                ⚠️ Koneksi Firestore Terhubung Namun Hak Akses Ditolak
+              </p>
+              <p className="font-medium text-xs">
+                Aplikasi berhasil menghubungi project Firebase Anda <strong className="font-mono text-amber-900 bg-amber-100/50 px-1 py-0.5 rounded">"isman-mimika"</strong>, tetapi database mengembalikan error <strong className="font-mono text-xs bg-amber-100 px-1 py-0.5 rounded">"Missing or insufficient permissions"</strong>.
+              </p>
+              <p className="text-[11px] font-medium leading-relaxed">
+                Silakan buka tab rules Firestore Anda di <a href="https://console.firebase.google.com/project/isman-mimika/firestore/rules" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline font-bold">Konsol Firebase - Rules</a> dan publikasikan aturan (rules) berikut agar database dapat diakses oleh aplikasi Anda:
+              </p>
+              <pre className="p-3 bg-amber-900/10 rounded-lg text-[10px] font-mono whitespace-pre-wrap leading-tight text-amber-950 max-h-40 overflow-y-auto">
+{`rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}`}
+              </pre>
+              <div className="flex gap-2">
+                <button 
+                  onClick={() => setGlobalDbError(null)}
+                  className="mt-1 px-3 py-1 bg-amber-600 text-white hover:bg-amber-700 font-bold rounded-lg text-[11px]"
+                >
+                  Tutup Pesan Ini
+                </button>
+              </div>
+            </div>
+          )}
+
           <AnimatePresence mode="wait">
             <motion.div
               key={activeMenu}
@@ -1892,6 +1927,7 @@ export default function App() {
 
 function MonitoringProgressView({ user, onSelectUser }: { user: any, onSelectUser: (u: any, rt: 'strategis' | 'operasional') => void }) {
   const [accounts, setAccounts] = useState<any[]>([]);
+  const [dbError, setDbError] = useState<string | null>(null);
   const [activeTooltip, setActiveTooltip] = useState<{accId: string, menuKey: string, msg: string} | null>(null);
   const [loading, setLoading] = useState(true);
   const [filterRiskType, setFilterRiskType] = useState<'strategis' | 'operasional'>('strategis');
@@ -2153,8 +2189,14 @@ function MonitoringProgressView({ user, onSelectUser }: { user: any, onSelectUse
       const finalDocsSnap = await getDocs(collection(db, 'final_documents'));
       const docs = finalDocsSnap.docs.map(d => ({ ...d.data(), id: d.id }));
       setFinalDocsState(docs);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error loading progress data:', error);
+      setDbError(error.message || 'Missing or insufficient permissions');
+      try {
+        handleFirestoreError(error, OperationType.GET, 'accounts');
+      } catch (err) {
+        console.warn("Handled fetchProgressData firestore error gracefully:", err);
+      }
     } finally {
       setLoading(false);
     }
@@ -2242,6 +2284,16 @@ function MonitoringProgressView({ user, onSelectUser }: { user: any, onSelectUse
         }
         if (m.length > 0) missingIdent.push(`${getRiskName(r, idx)}: ${m.join(', ')}`);
       });
+      const hasFraud = baseRisks.some(r => r.jenisRisiko === 'Risiko Fraud');
+      const hasNonFraud = baseRisks.some(r => r.jenisRisiko === 'Risiko Non-Fraud' || !r.jenisRisiko);
+      if (baseRisks.length > 0) {
+        if (!hasFraud) {
+          missingIdent.push("Belum ada risiko fraud");
+        }
+        if (!hasNonFraud) {
+          missingIdent.push("Belum ada risiko non-fraud");
+        }
+      }
       const hasIdentification = (baseRisks.length > 0) && missingIdent.length === 0;
       if (!hasIdentification) reasons.identification = baseRisks.length === 0 ? "Belum ada risiko" : "Kekurangan Menu II: " + missingIdent.slice(0, 2).join('; ');
 
@@ -2390,6 +2442,39 @@ function MonitoringProgressView({ user, onSelectUser }: { user: any, onSelectUse
 
   return (
     <div className="space-y-6">
+      {dbError && (
+        <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl space-y-2 text-amber-800 text-[13px] leading-relaxed">
+          <p className="font-bold flex items-center gap-1.5 text-amber-950">
+            ⚠️ Koneksi Firestore Terhubung Namun Hak Akses Ditolak
+          </p>
+          <p className="font-medium text-xs">
+            Aplikasi berhasil menghubungi project Firebase Anda <strong className="font-mono text-amber-900 bg-amber-100/50 px-1 py-0.5 rounded">"isman-mimika"</strong>, tetapi database mengembalikan error <strong className="font-mono text-xs bg-amber-100 px-1 py-0.5 rounded">"Missing or insufficient permissions"</strong>.
+          </p>
+          <p className="text-[11px] font-medium leading-relaxed">
+            Hal ini normal terjadi pada project Firebase baru jika tab rules Anda belum dipublikasikan. Silakan buka tab rules Firestore Anda di <a href="https://console.firebase.google.com/project/isman-mimika/firestore/rules" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline font-bold">Konsol Firebase - Rules</a> dan publikasikan aturan (rules) berikut agar dapat diakses:
+          </p>
+          <pre className="p-3 bg-amber-900/10 rounded-lg text-[10px] font-mono whitespace-pre-wrap leading-tight text-amber-900 max-h-40 overflow-y-auto">
+{`rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}`}
+          </pre>
+          <p className="text-[10px] italic font-semibold text-amber-700">
+            *TIPS: Pastikan Anda juga mengaktifkan fitur "Anonymous Sign-In" pada menu Authentication dan Sign-In method di Firebase Console Anda jika menggunakan aturan autentikasi.
+          </p>
+          <button 
+            onClick={() => setDbError(null)}
+            className="mt-1 px-3 py-1 bg-amber-600 text-white hover:bg-amber-700 font-bold rounded-lg text-[11px]"
+          >
+            Tutup Pesan Ini
+          </button>
+        </div>
+      )}
+
       {/* Hidden Report Template for Capture */}
       <div 
         id="progress-report-template" 
@@ -2747,19 +2832,17 @@ function LoginPage({ onLogin, accounts }: { onLogin: (userData: any) => void, ac
   const [error, setError] = useState('');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
-  const isPlaceholderConfig = !firebaseConfig.projectId || firebaseConfig.projectId.startsWith('remixed');
-
   const handleManualLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setIsLoggingIn(true);
     
     // Timeout handler to prevent infinite spinning when Firebase is unconfigured or blocked by network policies
-    const withTimeout = async <T,>(promise: Promise<T>, ms: number = 4000): Promise<T> => {
+    const withTimeout = async <T,>(promise: Promise<T>, ms: number = 20000): Promise<T> => {
       let id: any;
       const timeoutPromise = new Promise<never>((_, reject) => {
         id = setTimeout(() => {
-          reject(new Error("Timeout koneksi database. Silakan pastikan Anda telah menyelesaikan setup Firebase di AI Studio (klik ikon roda gigi / tab Firebase di panel kanan)."));
+          reject(new Error("Timeout koneksi database. Silakan pastikan Anda telah menyelesaikan setup Firebase di AI Studio."));
         }, ms);
       });
       return Promise.race([
@@ -2799,10 +2882,6 @@ function LoginPage({ onLogin, accounts }: { onLogin: (userData: any) => void, ac
         }
       }
 
-      if (isPlaceholderConfig) {
-        throw new Error("Koneksi Firebase belum dikonfigurasi (masih menggunakan nilai remix placeholder). Harap klik tombol 'Set up Firebase' di menu AI Studio sebelah kanan terlebih dahulu untuk mengaktifkan database.");
-      }
-
       // First try to find by username only
       let found: any = null;
       
@@ -2811,7 +2890,7 @@ function LoginPage({ onLogin, accounts }: { onLogin: (userData: any) => void, ac
         collection(db, 'accounts'), 
         where('username_lowercase', '==', lowerUsername)
       );
-      const querySnapshotLower = await withTimeout(getDocs(qLower), 4000);
+      const querySnapshotLower = await withTimeout(getDocs(qLower), 20000);
       
       if (!querySnapshotLower.empty) {
         const docData = querySnapshotLower.docs[0];
@@ -2822,14 +2901,14 @@ function LoginPage({ onLogin, accounts }: { onLogin: (userData: any) => void, ac
           collection(db, 'accounts'), 
           where('username', '==', cleanUsername)
         );
-        const querySnapshotExact = await withTimeout(getDocs(qExact), 4000);
+        const querySnapshotExact = await withTimeout(getDocs(qExact), 20000);
         
         if (!querySnapshotExact.empty) {
           const docData = querySnapshotExact.docs[0];
           found = { ...docData.data(), uid: docData.id };
         } else {
           // 3. Last resort: scan all accounts (robust fallback for older legacy accounts)
-          const allSnap = await withTimeout(getDocs(collection(db, 'accounts')), 4000);
+          const allSnap = await withTimeout(getDocs(collection(db, 'accounts')), 20000);
           const docMatch = allSnap.docs.find(d => (d.data().username || '').toLowerCase() === lowerUsername);
           if (docMatch) {
             found = { ...docMatch.data(), uid: docMatch.id };
@@ -2874,20 +2953,6 @@ function LoginPage({ onLogin, accounts }: { onLogin: (userData: any) => void, ac
         </div>
         
         <div className="p-8 space-y-6">
-          {isPlaceholderConfig && (
-            <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs font-semibold leading-relaxed space-y-1">
-              <p className="font-bold flex items-center gap-1.5 text-[13px] text-amber-900">
-                ⚠️ Konfigurasi Firebase Belum Siap
-              </p>
-              <p className="text-[11px] font-medium">
-                Aplikasi ini didev sebagai remix template. Agar database Firestore/Auth berfungsi, silakan klik tombol <strong className="bg-amber-200/50 px-1 py-0.5 rounded text-amber-950 font-bold">Set up Firebase</strong> di panel kanan AI Studio lalu setujui persyaratannya.
-              </p>
-              <p className="text-[10px] font-bold text-amber-600 italic">
-                *TIPS: Untuk sekadar uji coba login lokal, Anda dapat masuk instan menggunakan username <span className="bg-amber-100 px-1 py-0.5 rounded font-mono">admin</span> & password <span className="bg-amber-100 px-1 py-0.5 rounded font-mono">admin123</span> yang melewati bypass database.
-              </p>
-            </div>
-          )}
-
           <form onSubmit={handleManualLogin} className="space-y-6">
             {error && (
               <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-xs text-red-500 font-bold bg-red-50 p-3 rounded-lg border border-red-100 flex items-center gap-2">
@@ -2958,6 +3023,113 @@ function AccountManagementView({ accounts }: { accounts: any[] }) {
   const [editingUid, setEditingUid] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ username: '', password: '', role: '' });
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+
+  const [bulkText, setBulkText] = useState('');
+  const [isBulkProcessing, setIsBulkProcessing] = useState(false);
+
+  // Parse bulkText into objects in real-time
+  const bulkResults = useMemo(() => {
+    if (!bulkText.trim()) return [];
+    const lines = bulkText.split('\n');
+    const items: Array<{username: string; password: string; role: string; isDuplicate: boolean; isLocalDuplicate: boolean}> = [];
+    const seenUsernames = new Set<string>();
+
+    lines.forEach((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+
+      // Excel uses tab-separated columns ('\t')
+      let parts: string[] = [];
+      if (trimmed.includes('\t')) {
+        parts = trimmed.split('\t');
+      } else if (trimmed.includes('|')) {
+        parts = trimmed.split('|');
+      } else if (trimmed.includes(';')) {
+        parts = trimmed.split(';');
+      } else if (trimmed.includes(',')) {
+        parts = trimmed.split(',');
+      } else {
+        parts = trimmed.split(/\s+/);
+      }
+
+      const rawUsername = (parts[0] || '').trim();
+      const rawPassword = (parts[1] || '').trim();
+      let rawRole = (parts[2] || '').trim();
+
+      if (!rawUsername) return;
+
+      // Default role mapping
+      let finalRole = 'User';
+      const roleLower = rawRole.toLowerCase();
+      if (roleLower.includes('admin')) {
+        finalRole = 'Administrator';
+      } else if (roleLower.includes('oper')) {
+        finalRole = 'Operator';
+      } else if (roleLower.includes('user')) {
+        finalRole = 'User';
+      } else if (rawRole) {
+        finalRole = rawRole.charAt(0).toUpperCase() + rawRole.slice(1).toLowerCase();
+        if (!['Administrator', 'Operator', 'User'].includes(finalRole)) {
+          finalRole = 'User';
+        }
+      }
+
+      const isDuplicate = accounts.some(acc => acc.username.toLowerCase() === rawUsername.toLowerCase());
+      const isLocalDuplicate = seenUsernames.has(rawUsername.toLowerCase());
+      
+      seenUsernames.add(rawUsername.toLowerCase());
+
+      items.push({
+        username: rawUsername,
+        password: rawPassword,
+        role: finalRole,
+        isDuplicate,
+        isLocalDuplicate
+      });
+    });
+
+    return items;
+  }, [bulkText, accounts]);
+
+  const handleBulkCreate = async () => {
+    setIsBulkProcessing(true);
+    setError('');
+
+    const accountsToCreate = bulkResults.filter(r => !r.isDuplicate && !r.isLocalDuplicate && r.username && r.password);
+    if (accountsToCreate.length === 0) {
+      alert('Tidak ada akun valid yang bisa dibuat.');
+      setIsBulkProcessing(false);
+      return;
+    }
+
+    try {
+      let successCount = 0;
+      const batchPromises = accountsToCreate.map(async (acc) => {
+        const cleanUsername = acc.username.trim();
+        const newUid = doc(collection(db, 'accounts')).id;
+        const payload = {
+          username: cleanUsername,
+          username_lowercase: cleanUsername.toLowerCase(),
+          password: acc.password,
+          role: acc.role,
+          createdAt: new Date().toISOString(),
+          uid: newUid
+        };
+
+        await setDoc(doc(db, 'accounts', newUid), payload);
+        successCount++;
+      });
+
+      await Promise.all(batchPromises);
+      alert(`Berhasil membuat ${successCount} akun baru sekaligus!`);
+      setBulkText('');
+    } catch (error: any) {
+      console.error('Bulk Account creation error:', error);
+      alert('Gagal membuat sebagian atau seluruh akun: ' + (error.message || 'Error tidak diketahui'));
+    } finally {
+      setIsBulkProcessing(false);
+    }
+  };
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -3131,6 +3303,102 @@ function AccountManagementView({ accounts }: { accounts: any[] }) {
             <Plus size={14} /> Buat Akun
           </button>
         </form>
+      </div>
+
+      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
+        <div className="px-6 py-4 bg-slate-900 text-white flex justify-between items-center">
+          <h4 className="font-bold text-xs uppercase tracking-widest italic flex items-center gap-2">
+            <Users size={14} /> Buat Banyak Akun Sekaligus (Bulk Paste dari Excel)
+          </h4>
+        </div>
+        <div className="p-6 space-y-4">
+          <p className="text-slate-500 text-[11px] font-medium leading-relaxed italic">
+            Copy kolom dari Excel/Spreadsheet Anda, lalu paste ke kotak di bawah ini. Format kolom di Excel:<br />
+            <strong>[Kolom 1: Username] &nbsp;|&nbsp; [Kolom 2: Password] &nbsp;|&nbsp; [Kolom 3: Role (Administrator/Operator/User)]</strong>.<br />
+            Jika Role kosong, otomatis didaftarkan sebagai <strong>User</strong>.
+          </p>
+          <textarea
+            className="w-full bg-slate-50 border border-slate-200 p-3 rounded outline-none focus:border-blue-500 text-xs font-mono"
+            rows={5}
+            placeholder={`Contoh data yang di-copy dari Excel:
+agus1	p@ssword123	Operator
+agus2	rahasia456	User
+agus3	mykey789	Administrator`}
+            value={bulkText}
+            onChange={(e) => setBulkText(e.target.value)}
+          />
+
+          {bulkResults.length > 0 && (
+            <div className="space-y-2 border border-slate-100 rounded-lg p-3 bg-slate-50">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Preview Akun Terdeteksi ({bulkResults.length} baris):</span>
+              <div className="max-h-60 overflow-y-auto border border-slate-100 rounded bg-white">
+                <table className="w-full text-left text-[11px]">
+                  <thead className="bg-slate-50 text-slate-400 font-black uppercase text-[9px] tracking-wider border-b border-slate-100">
+                    <tr>
+                      <th className="p-2 w-10 text-center">No</th>
+                      <th className="p-2">Username</th>
+                      <th className="p-2">Password</th>
+                      <th className="p-2">Role</th>
+                      <th className="p-2 text-center text-[10px]">Validasi / Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {bulkResults.map((item, idx) => {
+                      return (
+                        <tr key={idx} className={item.isDuplicate ? "bg-red-50/50" : item.isLocalDuplicate ? "bg-amber-50/50" : "hover:bg-slate-50/50"}>
+                          <td className="p-2 text-center text-slate-400 font-bold">{idx + 1}</td>
+                          <td className="p-2 font-bold text-slate-900 uppercase tracking-tight">{item.username}</td>
+                          <td className="p-2 font-mono text-slate-500">{item.password || <span className="text-red-400 italic font-sans">[Kosong]</span>}</td>
+                          <td className="p-2">
+                            <span className="bg-slate-100 px-2 py-0.5 rounded text-[9px] font-bold text-slate-600 uppercase italic">
+                              {item.role}
+                            </span>
+                          </td>
+                          <td className="p-2 text-center font-bold text-[10px]">
+                            {item.isDuplicate ? (
+                              <span className="text-red-600 bg-red-50 px-2 py-0.5 rounded border border-red-100">Sudah Ada di DB</span>
+                            ) : item.isLocalDuplicate ? (
+                              <span className="text-amber-600 bg-amber-50 px-2 py-0.5 rounded border border-amber-100">Duplikat Baris</span>
+                            ) : !item.username || !item.password ? (
+                              <span className="text-red-600 bg-red-50 px-2 py-0.5 rounded border border-red-100">Username/Password Kosong</span>
+                            ) : (
+                              <span className="text-green-600 bg-green-50 px-2 py-0.5 rounded border border-green-100">Siap Ditambah</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-3">
+            {bulkText && (
+              <button
+                type="button"
+                onClick={() => setBulkText('')}
+                className="px-4 py-2 bg-slate-100 text-slate-600 rounded text-xs font-bold uppercase tracking-wider hover:bg-slate-200 transition-colors"
+              >
+                Clear
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={isBulkProcessing || bulkResults.length === 0 || bulkResults.some(r => r.isDuplicate || r.isLocalDuplicate || !r.username || !r.password)}
+              onClick={handleBulkCreate}
+              className="bg-emerald-600 text-white py-2 px-4 rounded font-bold uppercase text-[10px] tracking-widest hover:bg-emerald-700 disabled:opacity-50 transition-all flex items-center justify-center gap-2"
+            >
+              <CheckCircle size={14} />
+              {isBulkProcessing ? (
+                <span>Memproses Pembuatan Akun...</span>
+              ) : (
+                <span>Buat ({bulkResults.filter(r => !r.isDuplicate && !r.isLocalDuplicate && r.username && r.password).length}) Akun Baru</span>
+              )}
+            </button>
+          </div>
+        </div>
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
@@ -4771,10 +5039,38 @@ function RiskIdentificationView({ user, isReadOnly, riskType }: { user: any, isR
 
   const [isSyncing, setIsSyncing] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{id: string, type: 'row' | 'sub', rowId?: string, subRows?: any[], subIdx?: number} | null>(null);
+  const [showSyncModal, setShowSyncModal] = useState(false);
+  const [syncPreviewList, setSyncPreviewList] = useState<{ tujuan: string, iku: string, exists: boolean }[]>([]);
+
+  // Compute number of unsynced items on the fly
+  const unsyncedCount = useMemo(() => {
+    if (!contextData || !contextData.assessmentRows) return 0;
+    
+    // Prepare existing row keys in Menu 2
+    const existingKeys = new Set(rows.map(r => 
+      `${(r.tujuan || '').trim().toLowerCase()}|${(r.indikator || '').trim().toLowerCase()}`
+    ));
+    
+    let count = 0;
+    contextData.assessmentRows.forEach((r: any) => {
+      let tujuanVal = '';
+      if (riskType === 'operasional') {
+        tujuanVal = (r.program || '').trim() || (r.sasaran || '').trim() || (r.tujuan || '').trim();
+      } else {
+        tujuanVal = (r.sasaran || '').trim() || (r.tujuan || '').trim() || (r.program || '').trim();
+      }
+      const ikuVal = (r.iku || '').trim();
+      const key = `${tujuanVal.toLowerCase()}|${ikuVal.toLowerCase()}`;
+      if ((tujuanVal || ikuVal) && key !== '|' && !existingKeys.has(key)) {
+        count++;
+      }
+    });
+    return count;
+  }, [contextData, rows, riskType]);
 
   // Fetch Risk Identification and Context non-realtime
   const fetchRiskData = useCallback(async () => {
-    if (rows.length === 0) setLoading(true);
+    setLoading(true);
     try {
       // First fetch context
       const docRef = doc(db, 'risk_context', contextId);
@@ -4793,7 +5089,14 @@ function RiskIdentificationView({ user, isReadOnly, riskType }: { user: any, isR
       );
 
       const snapshot = await getDocs(q);
-      const data = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+      const data = snapshot.docs.map(doc => {
+        const d = doc.data();
+        return {
+          ...d,
+          id: doc.id,
+          jenisRisiko: d.jenisRisiko || 'Risiko Non-Fraud'
+        };
+      });
       // Sort by order field primarily, then createdAt
       data.sort((a: any, b: any) => {
         if (a.order !== undefined && b.order !== undefined) {
@@ -4810,7 +5113,7 @@ function RiskIdentificationView({ user, isReadOnly, riskType }: { user: any, isR
     } finally {
       setLoading(false);
     }
-  }, [user.uid, riskType, contextId, rowsCacheKey, contextCacheKey, rows.length]);
+  }, [user.uid, riskType, contextId, rowsCacheKey, contextCacheKey]);
 
   useEffect(() => {
     fetchRiskData();
@@ -4856,6 +5159,7 @@ function RiskIdentificationView({ user, isReadOnly, riskType }: { user: any, isR
         indikator: initIndikator || '',
         risikoUraian: '',
         risikoKode: initialCode,
+        jenisRisiko: 'Risiko Non-Fraud',
         pemilik: '',
         // Initialize with one sub-row
         subRows: [
@@ -4896,7 +5200,11 @@ function RiskIdentificationView({ user, isReadOnly, riskType }: { user: any, isR
     const { id } = deleteTarget;
     try {
       // Optimistic update
-      setRows(prev => prev.filter(r => r.id !== id));
+      setRows(prev => {
+        const next = prev.filter(r => r.id !== id);
+        localStorage.setItem(rowsCacheKey, JSON.stringify(next));
+        return next;
+      });
       await deleteDoc(doc(db, 'risk_identification', id));
       setDeleteTarget(null);
       fetchRiskData();
@@ -5115,52 +5423,95 @@ function RiskIdentificationView({ user, isReadOnly, riskType }: { user: any, isR
       handleFirestoreError(error, OperationType.UPDATE, `risk_identification/${rowId}`);
     }
   };
-  const runSync = async () => {
+  const prepareSync = async () => {
     if (isReadOnly) return;
-    
-    if (!contextData || !contextData.assessmentRows || contextData.assessmentRows.length === 0) {
-      alert(`Menu 1 (Konfigurasi Konteks) masih kosong. Pastikan tabel di bagian bawah Menu 1 sudah diisi dengan ${riskType === 'operasional' ? 'Subkegiatan dan Indikator Keluaran' : 'Sasaran Strategis dan IKU'} agar dapat disinkronkan ke Menu 2.`);
-      return;
-    }
-
-    // Filter valid rows from Menu 1 bottom table
-    const contextPairsList = (contextData.assessmentRows || [])
-        .filter((r: any) => {
-          if (riskType === 'operasional') {
-            return (r.program || '').trim() || (r.iku || '').trim();
-          }
-          return (r.sasaran || '').trim() || (r.iku || '').trim();
-        })
-        .map((r: any) => {
-          const tujuanVal = riskType === 'operasional' ? (r.program || '').trim() : (r.sasaran || '').trim();
-          const ikuVal = (r.iku || '').trim();
-          
-          return {
-            tujuan: tujuanVal,
-            iku: ikuVal,
-            key: `${tujuanVal.toLowerCase()}|${ikuVal.toLowerCase()}`
-          };
-        });
-    
-    if (contextPairsList.length === 0) {
-      alert("Tabel di Menu 1 belum memiliki data yang cukup (Subkegiatan/IKU) untuk disinkronkan.");
-      return;
-    }
-
-    if (!window.confirm("Apakah Anda yakin ingin melakukan sinkronisasi otomatis?\n\nSinkronisasi akan menambahkan baris baru di Menu 2 berdasarkan data dari Menu 1. Baris yang sudah ada tidak akan dihapus.")) {
-      return;
-    }
-
     setIsSyncing(true);
     try {
-      let batch = writeBatch(db);
-      let batchCount = 0;
+      let currentContext = null;
+
+      // 1. Fetch from Firestore for the absolute, freshest source of truth
+      try {
+        const docRef = doc(db, 'risk_context', contextId);
+        const cSnap = await getDoc(docRef);
+        if (cSnap.exists()) {
+          currentContext = cSnap.data();
+          localStorage.setItem(contextCacheKey, JSON.stringify(currentContext));
+        }
+      } catch (e) {
+        console.error("Firestore fetch error during sync:", e);
+      }
+
+      // Fallback to cache if Firestore fetch was unsuccessful or empty
+      if (!currentContext) {
+        try {
+          const cached = localStorage.getItem(contextCacheKey);
+          if (cached) {
+            currentContext = JSON.parse(cached);
+          }
+        } catch (e) {
+          console.error("Error reading cached context during sync:", e);
+        }
+      }
+
+      if (!currentContext || !currentContext.assessmentRows || currentContext.assessmentRows.length === 0) {
+        alert("Konfigurasi Konteks (Menu I) bagian bawah masih kosong atau belum diisi. Silakan isi tabel penilaian di bagian bawah Menu I terlebih dahulu.");
+        setIsSyncing(false);
+        return;
+      }
+
+      // 2. Build unique pairs strictly from bottom assessment table
+      const contextPairsMap = new Map<string, { tujuan: string, iku: string }>();
+      const assessmentRows = currentContext.assessmentRows || [];
       
+      assessmentRows.forEach((r: any) => {
+        let tujuanVal = '';
+        if (riskType === 'operasional') {
+          tujuanVal = (r.program || '').trim() || (r.sasaran || '').trim() || (r.tujuan || '').trim();
+        } else {
+          tujuanVal = (r.sasaran || '').trim() || (r.tujuan || '').trim() || (r.program || '').trim();
+        }
+        const ikuVal = (r.iku || '').trim();
+        const key = `${tujuanVal.toLowerCase()}|${ikuVal.toLowerCase()}`;
+        if ((tujuanVal || ikuVal) && key !== '|') {
+          contextPairsMap.set(key, { tujuan: tujuanVal, iku: ikuVal });
+        }
+      });
+
       const existingKeys = new Set(rows.map(r => 
         `${(r.tujuan || '').trim().toLowerCase()}|${(r.indikator || '').trim().toLowerCase()}`
       ));
 
+      const preview = Array.from(contextPairsMap.values()).map((p: any) => {
+        const key = `${p.tujuan.toLowerCase()}|${p.iku.toLowerCase()}`;
+        return {
+          tujuan: p.tujuan,
+          iku: p.iku,
+          exists: existingKeys.has(key)
+        };
+      });
+
+      setSyncPreviewList(preview);
+      setShowSyncModal(true);
+    } catch (err) {
+      console.error("Prepare Sync Error:", err);
+      alert("Gagal memuat data dari Menu 1: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const executeSync = async () => {
+    if (isReadOnly) return;
+    setIsSyncing(true);
+    try {
+      let batch = writeBatch(db);
+      let batchCount = 0;
       let addedCount = 0;
+
+      const existingKeys = new Set(rows.map(r => 
+        `${(r.tujuan || '').trim().toLowerCase()}|${(r.indikator || '').trim().toLowerCase()}`
+      ));
+
       let lastSeq = 0;
       rows.forEach(r => {
         const segs = (r.risikoKode || '').split('.');
@@ -5169,10 +5520,10 @@ function RiskIdentificationView({ user, isReadOnly, riskType }: { user: any, isR
           if (!isNaN(seq) && seq > lastSeq) lastSeq = seq;
         }
       });
-      
+
       const currentMaxOrder = rows.length > 0 ? Math.max(...rows.map(r => r.order || 0)) : 0;
       const prefix = riskType === 'operasional' ? 'ROO' : 'RSO';
-      const year = '26'; // Default for the app's current context
+      const year = '26';
       
       let baseP1 = '01';
       let baseP2 = '01';
@@ -5184,20 +5535,27 @@ function RiskIdentificationView({ user, isReadOnly, riskType }: { user: any, isR
         }
       }
 
-      for (const p of contextPairsList) {
-        if (!existingKeys.has(p.key) && p.key !== '|') {
+      const newRows = [...rows];
+      const itemsToSync = syncPreviewList.filter(item => !item.exists);
+
+      for (const p of itemsToSync) {
+        const key = `${p.tujuan.toLowerCase()}|${p.iku.toLowerCase()}`;
+        if (!existingKeys.has(key)) {
           const newDocRef = doc(collection(db, 'risk_identification'));
           addedCount++;
           const nextSeq = (lastSeq + addedCount).toString().padStart(2, '0');
           const risikoKode = `${prefix}.${year}.${baseP1}.${baseP2}.${nextSeq}`;
 
-          batch.set(newDocRef, {
+          const newObj = {
+            id: newDocRef.id,
             tujuan: p.tujuan,
             indikator: p.iku,
             risikoUraian: '',
             risikoKode: risikoKode,
+            jenisRisiko: 'Risiko Non-Fraud',
             pemilik: '',
             subRows: [{
+              id: doc(collection(db, 'temp')).id,
               sebabUraian: '',
               sebabSumber: 'Internal',
               control: 'C',
@@ -5213,9 +5571,11 @@ function RiskIdentificationView({ user, isReadOnly, riskType }: { user: any, isR
             createdByUid: user.uid,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString()
-          });
-          
-          existingKeys.add(p.key);
+          };
+
+          batch.set(newDocRef, newObj);
+          newRows.push(newObj);
+          existingKeys.add(key);
           batchCount++;
           if (batchCount >= 400) {
             await batch.commit();
@@ -5230,14 +5590,15 @@ function RiskIdentificationView({ user, isReadOnly, riskType }: { user: any, isR
       }
 
       if (addedCount > 0) {
-        alert(`Sinkronisasi berhasil! Menambah ${addedCount} data baru ke Menu 2.`);
-      } else {
-        alert("Semua data dari Menu 1 sudah ada di Menu 2. Tidak ada data baru yang ditambahkan.");
+        setRows(newRows);
+        localStorage.setItem(rowsCacheKey, JSON.stringify(newRows));
       }
+      
+      setShowSyncModal(false);
       fetchRiskData();
     } catch (err) {
-      console.error("Sync Error:", err);
-      alert("Terjadi kesalahan saat sinkronisasi: " + (err instanceof Error ? err.message : String(err)));
+      console.error("Execute Sync Error:", err);
+      alert("Terjadi kesalahan saat menyimpan data sinkronisasi: " + (err instanceof Error ? err.message : String(err)));
     } finally {
       setIsSyncing(false);
     }
@@ -5247,7 +5608,11 @@ function RiskIdentificationView({ user, isReadOnly, riskType }: { user: any, isR
     const path = `risk_identification/${id}`;
     try {
       // Optimistic update
-      setRows(prev => prev.map(r => r.id === id ? { ...r, [field]: value } : r));
+      setRows(prev => {
+        const next = prev.map(r => r.id === id ? { ...r, [field]: value } : r);
+        localStorage.setItem(rowsCacheKey, JSON.stringify(next));
+        return next;
+      });
       await setDoc(doc(db, 'risk_identification', id), { [field]: value }, { merge: true });
       fetchRiskData();
     } catch (error) {
@@ -5305,6 +5670,28 @@ function RiskIdentificationView({ user, isReadOnly, riskType }: { user: any, isR
 
   return (
     <div className="space-y-6">
+      {unsyncedCount > 0 && !isReadOnly && (
+        <div className="bg-amber-50 border border-amber-200 text-slate-800 rounded-xl p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-sm transition-all duration-200">
+          <div className="flex items-start gap-3">
+            <div className="p-2.5 bg-amber-100 text-amber-800 rounded-lg shrink-0 mt-0.5">
+              <RotateCw size={18} className="animate-spin text-amber-600" style={{ animationDuration: '4s' }} />
+            </div>
+            <div>
+              <h5 className="font-bold text-slate-900 text-xs">Penilaian Baru Terdeteksi di Menu I (Bagian Bawah)</h5>
+              <p className="text-[10px] text-slate-600 font-medium leading-relaxed mt-0.5">
+                Terdapat <strong>{unsyncedCount} baris perencanaan baru</strong> di tabel penilaian bagian bawah Menu I yang belum terdaftar di lembar kerja Identifikasi Risiko ini.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={prepareSync}
+            className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-yellow-500 font-black text-[9px] uppercase tracking-widest rounded-lg transition-all flex items-center gap-2 shrink-0 shadow-sm border border-slate-800 hover:scale-[1.02] active:scale-[0.98]"
+          >
+            <RotateCw size={11} /> Sinkronisasikan Sekarang
+          </button>
+        </div>
+      )}
+
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
         <div className="px-6 py-4 border-b border-slate-100 bg-slate-900 text-white flex justify-between items-center">
           <div className="flex items-center gap-3">
@@ -5327,7 +5714,7 @@ function RiskIdentificationView({ user, isReadOnly, riskType }: { user: any, isR
                 <th className="px-1 py-3 border-r border-slate-200" rowSpan={2}>No</th>
                 <th className="px-2 py-3 border-r border-slate-200 min-w-[150px]" rowSpan={2}>{riskType === 'operasional' ? 'Subkegiatan' : 'Tujuan/Sasaran Strategis'}</th>
                 <th className="px-2 py-3 border-r border-slate-200 min-w-[150px]" rowSpan={2}>{riskType === 'operasional' ? 'Indikator Keluaran' : 'Indikator Kinerja'}</th>
-                <th className="px-2 py-3 border-r border-slate-200" colSpan={2}>Risiko</th>
+                <th className="px-2 py-3 border-r border-slate-200" colSpan={3}>Risiko</th>
                 <th className="px-2 py-3 border-r border-slate-200 min-w-[120px]" rowSpan={2}>Pemilik</th>
                 <th className="px-2 py-3 border-r border-slate-200" colSpan={2}>Sebab</th>
                 <th className="px-1 py-3 border-r border-slate-200 w-16" rowSpan={2}>C/UC</th>
@@ -5336,6 +5723,7 @@ function RiskIdentificationView({ user, isReadOnly, riskType }: { user: any, isR
               <tr className="border-t border-slate-200 bg-slate-50/50">
                 <th className="px-2 py-2 border-r border-slate-200 font-black min-w-[200px]">Uraian</th>
                 <th className="px-2 py-2 border-r border-slate-200 font-black w-32">Kode</th>
+                <th className="px-2 py-2 border-r border-slate-200 font-black min-w-[100px]">Jenis Risiko</th>
                 <th className="px-2 py-2 border-r border-slate-200 font-black min-w-[200px]">Uraian</th>
                 <th className="px-2 py-2 border-r border-slate-200 font-black min-w-[100px]">Sumber</th>
                 <th className="px-2 py-2 border-r border-slate-200 font-black min-w-[200px]">Uraian Akibat</th>
@@ -5483,6 +5871,19 @@ function RiskIdentificationView({ user, isReadOnly, riskType }: { user: any, isR
                                 );
                               })()}
                             </td>
+                            <td className="px-2 py-4 border-r border-slate-100 align-middle bg-slate-50/20 text-center" rowSpan={subRows.length}>
+                              <div className="flex flex-col gap-1 items-center justify-center">
+                                <select 
+                                  className={`w-full bg-white border rounded text-[10px] py-1 px-1.5 outline-none transition-all shadow-sm font-bold mx-auto text-center ${row.jenisRisiko === 'Risiko Fraud' ? 'border-red-200 text-red-700 bg-red-50/50' : 'border-slate-200 text-slate-600'}`}
+                                  value={row.jenisRisiko || 'Risiko Non-Fraud'}
+                                  onChange={(e) => updateField(row.id, 'jenisRisiko', e.target.value)}
+                                  disabled={isReadOnly}
+                                >
+                                  <option value="Risiko Non-Fraud">Non-Fraud</option>
+                                  <option value="Risiko Fraud">Fraud</option>
+                                </select>
+                              </div>
+                            </td>
                             <td className="px-2 py-4 border-r border-slate-100 align-middle" rowSpan={subRows.length}>
                               <SuggestionInput 
                                 suggestions={Array.from(new Set(rows.map(r => String(r.pemilik || '')).filter(Boolean)))}
@@ -5582,7 +5983,7 @@ function RiskIdentificationView({ user, isReadOnly, riskType }: { user: any, isR
              <div className="flex gap-4">
                {/* Sync button remains */}
                <button 
-                 onClick={runSync}
+                 onClick={prepareSync}
                  disabled={isSyncing}
                  className={`text-[10px] font-bold px-4 py-2 rounded-lg flex items-center gap-2 uppercase tracking-widest border transition-all ${isSyncing ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed' : 'text-emerald-600 hover:bg-emerald-50 border-emerald-100'}`}
                >
@@ -5632,6 +6033,82 @@ function RiskIdentificationView({ user, isReadOnly, riskType }: { user: any, isR
                 >
                   Ya, Hapus
                 </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {showSyncModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-2xl shadow-2xl p-6 max-w-lg w-full flex flex-col max-h-[85vh]"
+            >
+              <div className="flex items-center gap-3 mb-4 pb-3 border-b border-slate-100">
+                <div className="p-2 bg-blue-50 text-blue-600 rounded-lg shrink-0">
+                  <RotateCw size={24} className="text-blue-500 animate-spin" style={{ animationDuration: '6s' }} />
+                </div>
+                <div className="text-left">
+                  <h3 className="text-xs font-black text-slate-900 uppercase tracking-widest leading-none">Sinkronisasi Perencanaan</h3>
+                  <p className="text-[9px] text-slate-500 font-medium italic mt-1">Berdasar tabel penilaian bawah Menu I (Penetapan Konteks)</p>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto space-y-3 pr-1 py-1">
+                <div className="bg-slate-50 border border-slate-150 rounded-xl p-3 text-left">
+                  <p className="text-[10px] text-slate-500 leading-normal font-medium">
+                    Sistem memetakan data perencanaan (Tujuan & Indikator) dari Menu I untuk diletakkan ke lembar kerja Identifikasi Risiko. Data yang sudah sinkron tidak akan diduplikasi atau ditimpa.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <h4 className="text-[10px] font-black text-slate-700 text-left uppercase tracking-wider">Preview Data Perencanaan:</h4>
+                  <div className="space-y-2 max-h-[250px] overflow-y-auto border border-slate-200 rounded-xl p-3 bg-slate-50/50">
+                    {syncPreviewList.map((item, index) => (
+                      <div key={index} className="flex justify-between items-start text-left gap-4 pb-2 border-b border-slate-100 last:border-0 last:pb-0">
+                        <div className="flex-1 space-y-1">
+                          <p className="font-bold text-slate-800 text-[10px] leading-snug">
+                            {item.tujuan}
+                          </p>
+                          <p className="text-slate-500 text-[9px] leading-tight">
+                            Indikator: <span className="font-mono bg-slate-200 px-1 py-0.5 rounded text-[8px]">{item.iku || '(Kosong)'}</span>
+                          </p>
+                        </div>
+                        {item.exists ? (
+                          <span className="text-[8px] uppercase tracking-wider font-black bg-slate-100 text-slate-400 px-2 py-1 rounded shrink-0">Tersinkron</span>
+                        ) : (
+                          <span className="text-[8px] uppercase tracking-wider font-black bg-emerald-150 text-emerald-800 px-2 py-1 rounded shrink-0 animate-pulse bg-emerald-100">Baru</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-6 pt-3 border-t border-slate-100 flex gap-3">
+                <button 
+                  onClick={() => setShowSyncModal(false)}
+                  className="flex-1 px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl font-bold tracking-widest uppercase text-[10px] transition-colors"
+                >
+                  Batal
+                </button>
+                {syncPreviewList.some(item => !item.exists) ? (
+                  <button 
+                    onClick={executeSync}
+                    className="flex-1 px-4 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black tracking-widest uppercase text-[10px] transition-colors shadow-lg shadow-emerald-100"
+                  >
+                    Mulai Sinkronisasi
+                  </button>
+                ) : (
+                  <button 
+                    disabled
+                    className="flex-1 px-4 py-3 bg-slate-200 text-slate-400 rounded-xl font-black tracking-widest uppercase text-[10px] cursor-not-allowed"
+                  >
+                    Sudah Sinkron
+                  </button>
+                )}
               </div>
             </motion.div>
           </div>
@@ -5766,7 +6243,7 @@ function ContextSettingView({ user, isReadOnly, riskType }: { user: any, isReadO
   const [loading, setLoading] = useState(!formData);
 
   const fetchContextData = useCallback(async () => {
-    if (!formData) setLoading(true);
+    setLoading(true);
     const initial = {
       namaPemda: 'Pemerintah Kabupaten Mimika',
       tahunPenilaian: '2026',
@@ -5838,7 +6315,7 @@ function ContextSettingView({ user, isReadOnly, riskType }: { user: any, isReadO
     } finally {
       setLoading(false);
     }
-  }, [storageKey, user.uid, cacheKey, isReadOnly, formData]);
+  }, [storageKey, user.uid, cacheKey, isReadOnly]);
 
   useEffect(() => {
     fetchContextData();
@@ -5878,7 +6355,7 @@ function ContextSettingView({ user, isReadOnly, riskType }: { user: any, isReadO
         }).filter(item => item.name);
         updates.ikuProgram = [...(formData.ikuProgram || []), ...newData];
       } else {
-        const newAssessmentRows = [...formData.assessmentRows];
+        const newAssessmentRows = [...(formData.assessmentRows || [])];
         for (const line of rawRows) {
           const cols = line.split('\t');
           if (cols.length < 1) continue;
@@ -6387,8 +6864,8 @@ function ContextSettingView({ user, isReadOnly, riskType }: { user: any, isReadO
                       value={row.tujuan}
                       disabled={isReadOnly}
                       onChange={(e) => {
-                        const next = [...formData.assessmentRows];
-                        next[idx].tujuan = e.target.value;
+                        const next = [...(formData.assessmentRows || [])];
+                        if (next[idx]) next[idx].tujuan = e.target.value;
                         updateData({ assessmentRows: next });
                       }}
                     >
@@ -6408,8 +6885,8 @@ function ContextSettingView({ user, isReadOnly, riskType }: { user: any, isReadO
                       value={row.sasaran}
                       disabled={isReadOnly}
                       onChange={(e) => {
-                        const next = [...formData.assessmentRows];
-                        next[idx].sasaran = e.target.value;
+                        const next = [...(formData.assessmentRows || [])];
+                        if (next[idx]) next[idx].sasaran = e.target.value;
                         updateData({ assessmentRows: next });
                       }}
                     >
@@ -6431,8 +6908,8 @@ function ContextSettingView({ user, isReadOnly, riskType }: { user: any, isReadO
                       value={row.program}
                       disabled={isReadOnly}
                       onChange={(e) => {
-                        const next = [...formData.assessmentRows];
-                        next[idx].program = e.target.value;
+                        const next = [...(formData.assessmentRows || [])];
+                        if (next[idx]) next[idx].program = e.target.value;
                         updateData({ assessmentRows: next });
                       }}
                     >
@@ -6448,8 +6925,8 @@ function ContextSettingView({ user, isReadOnly, riskType }: { user: any, isReadO
                       value={row.iku}
                       disabled={isReadOnly}
                       onChange={(e) => {
-                        const next = [...formData.assessmentRows];
-                        next[idx].iku = e.target.value;
+                        const next = [...(formData.assessmentRows || [])];
+                        if (next[idx]) next[idx].iku = e.target.value;
                         updateData({ assessmentRows: next });
                       }}
                     >
@@ -6463,7 +6940,7 @@ function ContextSettingView({ user, isReadOnly, riskType }: { user: any, isReadO
                     <td className="px-2 py-4 text-center">
                       <button 
                         onClick={() => {
-                          const next = formData.assessmentRows.filter((_: any, i: number) => i !== idx);
+                          const next = (formData.assessmentRows || []).filter((_: any, i: number) => i !== idx);
                           updateData({ assessmentRows: next });
                         }}
                         className="text-red-500 hover:text-red-700 transition-colors"
