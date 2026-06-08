@@ -1790,7 +1790,7 @@ service cloud.firestore {
               {activeMenu === 0 ? (
                 <MonitoringProgressView user={user!} onSelectUser={(u, rt) => { setViewingUser(u); setSelectedRiskType(rt); setActiveMenu(1); }} />
               ) : activeMenu === 1 ? (
-                <ContextSettingView user={viewingUser!} isReadOnly={isActuallyReadOnly} riskType={selectedRiskType || 'strategis'} />
+                <ContextSettingView user={viewingUser!} isReadOnly={isActuallyReadOnly} riskType={selectedRiskType || 'strategis'} isAdmin={user?.role === 'Administrator'} />
               ) : activeMenu === 2 ? (
                 <RiskIdentificationView user={viewingUser!} isReadOnly={isActuallyReadOnly} riskType={selectedRiskType || 'strategis'} />
               ) : activeMenu === 3 ? (
@@ -6234,7 +6234,7 @@ function RiskIdentificationView({ user, isReadOnly, riskType }: { user: any, isR
   );
 }
 
-function ContextSettingView({ user, isReadOnly, riskType }: { user: any, isReadOnly?: boolean, riskType: 'strategis' | 'operasional' }) {
+function ContextSettingView({ user, isReadOnly, riskType, isAdmin = false }: { user: any, isReadOnly?: boolean, riskType: 'strategis' | 'operasional', isAdmin?: boolean }) {
   const storageKey = `risk_context_${user.uid}_${riskType}`;
   const cacheKey = `cached_context_${user.uid}_${riskType}`;
 
@@ -6248,6 +6248,8 @@ function ContextSettingView({ user, isReadOnly, riskType }: { user: any, isReadO
   });
 
   const [loading, setLoading] = useState(!formData);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [successNotification, setSuccessNotification] = useState<string | null>(null);
 
   const fetchContextData = useCallback(async () => {
     setLoading(true);
@@ -6417,6 +6419,41 @@ function ContextSettingView({ user, isReadOnly, riskType }: { user: any, isReadO
     updateData({ [e.target.name]: e.target.value });
   };
 
+  const handleDeleteAllContext = () => {
+    setShowDeleteConfirm(true);
+  };
+
+  const executeDeleteAll = async () => {
+    const label = riskType === 'operasional' ? 'Operasional' : 'Strategis';
+    try {
+      setLoading(true);
+      const clearedData = {
+        sasaran: [],
+        ikuSasaran: [],
+        program: [],
+        ikuProgram: [],
+        assessmentRows: [{ tujuan: '', sasaran: '', program: '', iku: '' }]
+      };
+      
+      // Update local storage and React state immediately (Optimistic Update)
+      const nextData = { ...formData, ...clearedData };
+      setFormData(nextData);
+      localStorage.setItem(cacheKey, JSON.stringify(nextData));
+
+      // Persist directly to firestore
+      await setDoc(doc(db, 'risk_context', storageKey), nextData);
+      
+      // Show custom success notification toast
+      setSuccessNotification(`Seluruh data penetapan konteks ${label} berhasil dikosongkan.`);
+      setTimeout(() => setSuccessNotification(null), 5000);
+    } catch (err) {
+      console.error('Delete all error:', err);
+      alert('Gagal menghapus semua data penetapan konteks.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   if (loading || !formData) return <div className="text-center py-10 text-slate-400">Memuat konteks...</div>;
 
   const TableHeader = ({ title, colSpan = 1, rightLabel = '' }: { title: string, colSpan?: number, rightLabel?: string }) => (
@@ -6441,13 +6478,24 @@ function ContextSettingView({ user, isReadOnly, riskType }: { user: any, isReadO
         <h1 className="font-black text-sm uppercase tracking-[0.2em]">
           PENETAPAN KONTEKS RISIKO {riskType === 'operasional' ? 'OPERASIONAL' : 'STRATEGIS'} OPD
         </h1>
-        <button
-          onClick={fetchContextData}
-          disabled={loading}
-          className="px-2.5 py-1 border border-slate-300 hover:bg-slate-50 rounded text-[9px] font-black text-slate-500 hover:text-slate-700 flex items-center gap-1 transition-colors uppercase tracking-widest cursor-pointer"
-        >
-          <RotateCw size={10} className={loading ? "animate-spin" : ""} /> REFRESH
-        </button>
+        <div className="flex items-center gap-2">
+          {isAdmin && !isReadOnly && (
+            <button
+              onClick={handleDeleteAllContext}
+              disabled={loading}
+              className="px-2.5 py-1 border border-red-300 hover:bg-red-50 text-red-600 hover:text-red-700 rounded text-[9px] font-black flex items-center gap-1 transition-colors uppercase tracking-widest cursor-pointer animate-in fade-in duration-300"
+            >
+              <Trash2 size={10} /> HAPUS SEMUA
+            </button>
+          )}
+          <button
+            onClick={fetchContextData}
+            disabled={loading}
+            className="px-2.5 py-1 border border-slate-300 hover:bg-slate-50 rounded text-[9px] font-black text-slate-500 hover:text-slate-700 flex items-center gap-1 transition-colors uppercase tracking-widest cursor-pointer"
+          >
+            <RotateCw size={10} className={loading ? "animate-spin" : ""} /> REFRESH
+          </button>
+        </div>
       </div>
 
       {showPasteModal && (
@@ -7030,6 +7078,74 @@ function ContextSettingView({ user, isReadOnly, riskType }: { user: any, isReadO
           </div>
         </div>
       </div>
+
+      {/* Floating Success Toast Notification */}
+      {successNotification && (
+        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[300] bg-emerald-600 text-white font-bold text-[11px] uppercase tracking-wider px-6 py-3 rounded-full shadow-2xl flex items-center gap-2 animate-in slide-in-from-top-4 fade-in duration-300">
+          <CheckCircle size={14} />
+          {successNotification}
+        </div>
+      )}
+
+      {/* Custom Delete Confirmation Modal (Peringatan Hapus Semua) */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-[250] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="p-6 text-center space-y-4">
+              <div className="w-14 h-14 bg-red-100 rounded-full flex items-center justify-center mx-auto text-red-600 animate-pulse">
+                <ShieldAlert size={28} />
+              </div>
+              <h2 className="text-sm font-black text-slate-800 uppercase tracking-wide">
+                PERINGATAN KERAS!
+              </h2>
+              <div className="text-[11px] text-slate-600 space-y-2 leading-relaxed max-w-xs mx-auto">
+                <p>
+                  Apakah Anda benar-benar yakin ingin menghapus seluruh data penetapan konteks{' '}
+                  <strong className="text-red-600 font-bold uppercase">{riskType === 'operasional' ? 'OPERASIONAL' : 'STRATEGIS'}</strong> ini?
+                </p>
+                <div className="bg-slate-50 p-2.5 rounded-lg text-left text-[10px] space-y-1 font-medium border border-slate-200 text-slate-500">
+                  <p className="font-bold text-slate-700">Data yang akan dihapus secara permanen:</p>
+                  {riskType === 'operasional' ? (
+                    <ul className="list-disc pl-4 space-y-0.5">
+                      <li>Semua List Program</li>
+                      <li>Semua List Kegiatan Utama</li>
+                      <li>Semua List Subkegiatan</li>
+                      <li>Semua List Indikator Output/Keluaran</li>
+                      <li>Pemetaan Tabel Penilaian Risiko (Di Bagian Bawah)</li>
+                    </ul>
+                  ) : (
+                    <ul className="list-disc pl-4 space-y-0.5">
+                      <li>Semua List Sasaran Strategis</li>
+                      <li>Semua List IKU Sasaran OPD</li>
+                      <li>Semua Program Strategis</li>
+                      <li>Semua IKU Program OPD</li>
+                      <li>Pemetaan Tabel Penilaian Risiko (Di Bagian Bawah)</li>
+                    </ul>
+                  )}
+                  <p className="text-red-500 font-bold mt-2 italic text-center">Tindakan ini permanen dan tidak dapat dibatalkan!</p>
+                </div>
+              </div>
+            </div>
+            <div className="p-3 bg-slate-50 border-t flex justify-end gap-2 text-xs">
+              <button 
+                onClick={() => setShowDeleteConfirm(false)}
+                className="px-4 py-1.5 hover:bg-slate-200 rounded text-slate-500 font-bold uppercase tracking-wider text-[9px] transition-colors"
+              >
+                Batal
+              </button>
+              <button 
+                onClick={async () => {
+                  setShowDeleteConfirm(false);
+                  await executeDeleteAll();
+                }}
+                className="px-5 py-1.5 bg-red-600 hover:bg-red-700 active:bg-red-800 text-white font-black uppercase rounded tracking-wider text-[9px] flex items-center gap-1 transition-colors shadow-md shadow-red-500/10"
+              >
+                <Trash2 size={10} /> Ya, Hapus Semua
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
