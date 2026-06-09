@@ -246,9 +246,8 @@ export default function App() {
     if (!user) return [];
     let items = [...MENU_ITEMS_BASE];
     
-    if (user.role === 'Administrator' || user.role === 'Operator') {
-      items.unshift({ id: 0, title: 'MONITORING PROGRESS', icon: LayoutDashboard });
-    }
+    // Always add MONITORING PROGRESS to the top of the menu list for all users (including individually for each OPD)
+    items.unshift({ id: 0, title: 'MONITORING PROGRESS', icon: LayoutDashboard });
     
     // Only Administrators can see Account Management
     if (user.role !== 'Administrator') {
@@ -261,11 +260,7 @@ export default function App() {
   // Set initial active menu
   useEffect(() => {
     if (user) {
-      if (user.role === 'Administrator' || user.role === 'Operator') {
-        setActiveMenu(0);
-      } else {
-        setActiveMenu(1);
-      }
+      setActiveMenu(0);
     }
   }, [user]);
 
@@ -1633,24 +1628,38 @@ export default function App() {
         </div>
 
         <nav className="flex-1 overflow-y-auto px-4 py-2 space-y-1">
-          {menuItems.map((item) => (
-            <button
-              key={item.id}
-              onClick={() => handleMenuChange(item.id)}
-              className={`w-full flex items-center gap-3 p-3 rounded-lg transition-all text-sm font-medium ${
-                activeMenu === item.id 
-                  ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' 
-                  : 'hover:bg-slate-800 hover:text-white text-slate-400'
-              }`}
-            >
-              <item.icon size={20} className="shrink-0" />
-              {isSidebarOpen && (
-                <span className="truncate text-left leading-tight">
-                  {item.title}
-                </span>
-              )}
-            </button>
-          ))}
+          {menuItems.map((item) => {
+            const isNonProgressMenu = item.id === 9;
+            return (
+              <button
+                key={item.id}
+                onClick={() => handleMenuChange(item.id)}
+                className={`w-full flex items-center justify-between p-3 rounded-lg transition-all text-sm font-medium ${
+                  activeMenu === item.id 
+                    ? isNonProgressMenu
+                      ? 'bg-slate-700 text-slate-100 shadow-md shadow-slate-900/30 font-bold'
+                      : 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' 
+                    : isNonProgressMenu
+                      ? 'hover:bg-slate-800/80 hover:text-slate-300 text-slate-550 border-l-2 border-slate-700/55 pl-2'
+                      : 'hover:bg-slate-800 hover:text-white text-slate-400'
+                }`}
+              >
+                <div className="flex items-center gap-3 truncate">
+                  <item.icon size={20} className={`shrink-0 ${isNonProgressMenu && activeMenu !== item.id ? 'text-slate-600' : ''}`} />
+                  {isSidebarOpen && (
+                    <span className={`truncate text-left leading-tight ${isNonProgressMenu && activeMenu !== item.id ? 'text-slate-500 font-normal italic' : ''}`}>
+                      {item.title}
+                    </span>
+                  )}
+                </div>
+                {isSidebarOpen && isNonProgressMenu && (
+                  <span className={`text-[8px] font-black tracking-wide uppercase px-1.5 py-0.5 rounded ml-1 shrink-0 ${activeMenu === item.id ? 'bg-slate-800 text-slate-300' : 'bg-slate-950/40 text-slate-600'}`}>
+                    Non-Progres
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </nav>
 
         <div className="p-4 border-t border-slate-800 space-y-3">
@@ -2381,15 +2390,20 @@ function MonitoringProgressView({ user, onSelectUser }: { user: any, onSelectUse
   const sortedAccounts = useMemo(() => {
     let filtered = [...accounts].filter(acc => (acc.role || '').toLowerCase() !== 'administrator');
     
-    // Specifically for Admin, filter out "Biro" units and potentially other non-OPD units to reach ~26 main OPDs
-    if (user.role === 'Administrator') {
-      filtered = filtered.filter(acc => {
-        const name = (acc.username || '').toUpperCase();
-        if (name.includes('BIRO')) return false;
-        // The user specifically wants Inspektorat included and Biro excluded.
-        // Usually the 26 consists of Dinas, Badan, Satpol, Inspektorat, and RSUD.
-        return true;
-      });
+    // For normal OPD users, restrict progress view to ONLY show themselves (no other OPDs)
+    if (user.role !== 'Administrator' && user.role !== 'Operator') {
+      filtered = filtered.filter(acc => acc.uid === user.uid);
+    } else {
+      // Specifically for Admin, filter out "Biro" units and potentially other non-OPD units to reach ~26 main OPDs
+      if (user.role === 'Administrator') {
+        filtered = filtered.filter(acc => {
+          const name = (acc.username || '').toUpperCase();
+          if (name.includes('BIRO')) return false;
+          // The user specifically wants Inspektorat included and Biro excluded.
+          // Usually the 26 consists of Dinas, Badan, Satpol, Inspektorat, and RSUD.
+          return true;
+        });
+      }
     }
     
     if (searchQuery.trim()) {
@@ -2405,15 +2419,16 @@ function MonitoringProgressView({ user, onSelectUser }: { user: any, onSelectUse
       const percentB = stats[b.uid]?.percent || 0;
       return sortOrder === 'desc' ? percentB - percentA : percentA - percentB;
     });
-  }, [accounts, stats, sortOrder, searchQuery, user.role]);
+  }, [accounts, stats, sortOrder, searchQuery, user.role, user.uid]);
 
-  const handleDownloadReport = async () => {
+  const handleDownloadReport = async (format: 'jpg' | 'pdf') => {
     setIsExporting(true);
     try {
+      const todayStr = new Date().toISOString().split('T')[0];
       const element = document.getElementById('progress-report-template');
       if (!element) throw new Error('Template tidak ditemukan');
 
-      // Temporarily show the template for capture
+      // Temporarily show the template off-screen for clean capture
       element.style.display = 'block';
       
       const canvas = await html2canvas(element, {
@@ -2425,14 +2440,37 @@ function MonitoringProgressView({ user, onSelectUser }: { user: any, onSelectUse
 
       element.style.display = 'none';
 
-      const imgData = canvas.toDataURL('image/jpeg', 0.9);
-      const link = document.createElement('a');
-      link.href = imgData;
-      link.download = `Laporan_Progress_Gabungan_${new Date().toISOString().split('T')[0]}.jpg`;
-      link.click();
+      const imgData = canvas.toDataURL('image/jpeg', 0.95);
+
+      if (format === 'jpg') {
+        const link = document.createElement('a');
+        link.href = imgData;
+        link.download = `Laporan_Progress_Gabungan_${todayStr}.jpg`;
+        link.click();
+      } else {
+        // PDF: Generate high-fidelity multi-page PDF using the captured template
+        const pdf = new jsPDF('p', 'pt', 'a4');
+        const pdfWidth = pdf.internal.pageSize.getWidth();
+        const pdfHeight = pdf.internal.pageSize.getHeight();
+        
+        const scaledHeight = (canvas.height * pdfWidth) / canvas.width;
+        let leftHeight = scaledHeight;
+        let position = 0;
+        
+        while (leftHeight > 0) {
+          pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, scaledHeight);
+          leftHeight -= pdfHeight;
+          position -= pdfHeight;
+          if (leftHeight > 0) {
+            pdf.addPage();
+          }
+        }
+        
+        pdf.save(`Laporan_Progress_Gabungan_${todayStr}.pdf`);
+      }
     } catch (err) {
       console.error('Export error:', err);
-      alert('Gagal mengunduh laporan JPG: ' + (err instanceof Error ? err.message : 'Unknown error'));
+      alert(`Gagal mengunduh laporan ${format.toUpperCase()}: ` + (err instanceof Error ? err.message : 'Unknown error'));
     } finally {
       setIsExporting(false);
     }
@@ -2476,89 +2514,91 @@ service cloud.firestore {
       )}
 
       {/* Hidden Report Template for Capture */}
-      <div 
-        id="progress-report-template" 
-        style={{ display: 'none', position: 'fixed', left: '-9999px', width: '800px', padding: '40px', background: '#ffffff', color: '#0f172a' }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '32px', paddingBottom: '24px', borderBottom: '2px solid #0f172a' }}>
-           <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-              <img src="/logo.png" alt="Logo" style={{ width: '64px', height: '64px', objectFit: 'contain' }} crossOrigin="anonymous" />
-              <div>
-                 <h1 style={{ fontSize: '30px', fontWeight: '900', lineHeight: '1', letterSpacing: '-0.05em', color: '#0f172a', margin: 0 }}>ISMAN</h1>
-                 <p style={{ fontSize: '10px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.1em', marginTop: '4px', color: '#64748b' }}>Integrated Risk Management System</p>
-              </div>
-           </div>
-           <div style={{ textAlign: 'right' }}>
-              <p style={{ fontSize: '10px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.1em', color: '#94a3b8', margin: 0 }}>Laporan Monitoring</p>
-              <p style={{ fontSize: '20px', fontWeight: '900', textTransform: 'uppercase', color: '#0f172a', margin: 0 }}>Progres Pengisian</p>
-           </div>
-        </div>
+      <div style={{ position: 'fixed', left: '-9999px', top: '0px', width: '800px', zIndex: -100 }}>
+        <div 
+          id="progress-report-template" 
+          style={{ display: 'none', width: '800px', padding: '40px', background: '#ffffff', color: '#0f172a' }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '32px', paddingBottom: '24px', borderBottom: '2px solid #0f172a' }}>
+             <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                <img src="/logo.png" alt="Logo" style={{ width: '64px', height: '64px', objectFit: 'contain' }} crossOrigin="anonymous" />
+                <div>
+                   <h1 style={{ fontSize: '30px', fontWeight: '900', lineHeight: '1', letterSpacing: '-0.05em', color: '#0f172a', margin: 0 }}>ISMAN</h1>
+                   <p style={{ fontSize: '10px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.1em', marginTop: '4px', color: '#64748b' }}>Integrated Risk Management System</p>
+                </div>
+             </div>
+             <div style={{ textAlign: 'right' }}>
+                <p style={{ fontSize: '10px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.1em', color: '#94a3b8', margin: 0 }}>Laporan Monitoring</p>
+                <p style={{ fontSize: '20px', fontWeight: '900', textTransform: 'uppercase', color: '#0f172a', margin: 0 }}>Progres Pengisian</p>
+             </div>
+          </div>
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '24px' }}>
-           <div>
-              <p style={{ fontSize: '10px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.1em', lineHeight: '1', marginBottom: '4px', color: '#94a3b8' }}>Kategori Risiko</p>
-              <span 
-                style={{ display: 'inline-block', padding: '4px 12px', borderRadius: '9999px', fontSize: '10px', fontWeight: '900', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#ffffff', backgroundColor: '#1e293b' }}
-              >
-                GABUNGAN (RSO & ROO)
-              </span>
-           </div>
-           <div style={{ textAlign: 'right' }}>
-              <p style={{ fontSize: '10px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.1em', lineHeight: '1', marginBottom: '4px', color: '#94a3b8' }}>Waktu Cetak</p>
-              <p style={{ fontSize: '14px', fontWeight: '700', color: '#0f172a', margin: 0 }}>{new Date().toLocaleString('id-ID')}</p>
-           </div>
-        </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '24px' }}>
+             <div>
+                <p style={{ fontSize: '10px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.1em', lineHeight: '1', marginBottom: '4px', color: '#94a3b8' }}>Kategori Risiko</p>
+                <span 
+                  style={{ display: 'inline-block', padding: '4px 12px', borderRadius: '9999px', fontSize: '10px', fontWeight: '900', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#ffffff', backgroundColor: '#1e293b' }}
+                >
+                  GABUNGAN (RSO & ROO)
+                </span>
+             </div>
+             <div style={{ textAlign: 'right' }}>
+                <p style={{ fontSize: '10px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.1em', lineHeight: '1', marginBottom: '4px', color: '#94a3b8' }}>Waktu Cetak</p>
+                <p style={{ fontSize: '14px', fontWeight: '700', color: '#0f172a', margin: 0 }}>{new Date().toLocaleString('id-ID')}</p>
+             </div>
+          </div>
 
-        <div style={{ borderRadius: '12px', overflow: 'hidden', marginBottom: '32px', border: '1px solid #e2e8f0' }}>
-           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                 <tr style={{ color: '#ffffff', backgroundColor: '#0f172a' }}>
-                    <th style={{ padding: '12px 16px', textAlign: 'center', fontSize: '10px', fontWeight: '900', textTransform: 'uppercase', letterSpacing: '0.1em', width: '48px' }}>No</th>
-                    <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: '10px', fontWeight: '900', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Nama OPD / Unit Kerja</th>
-                    <th style={{ padding: '12px 16px', textAlign: 'center', fontSize: '10px', fontWeight: '900', textTransform: 'uppercase', letterSpacing: '0.1em', width: '112px' }}>Progress RSO</th>
-                    <th style={{ padding: '12px 16px', textAlign: 'center', fontSize: '10px', fontWeight: '900', textTransform: 'uppercase', letterSpacing: '0.1em', width: '112px' }}>Progress ROO</th>
-                 </tr>
-              </thead>
-              <tbody>
-                 {sortedAccounts
-                  .map((acc, idx) => {
-                    const s = stats[acc.uid] || { strategis: { percent: 0 }, operasional: { percent: 0 } };
-                    const pRSO = s.strategis?.percent || 0;
-                    const pROO = s.operasional?.percent || 0;
-                    return (
-                       <tr key={acc.uid} style={{ backgroundColor: idx % 2 === 0 ? '#ffffff' : '#f8fafc' }}>
-                          <td style={{ padding: '12px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '700', borderRight: '1px solid #f1f5f9', color: '#64748b' }}>{idx + 1}</td>
-                          <td style={{ padding: '12px 16px', fontSize: '12px', fontWeight: '900', textTransform: 'uppercase', letterSpacing: '-0.025em', color: '#1e293b' }}>{acc.username}</td>
-                          <td style={{ padding: '12px 16px', textAlign: 'center', borderLeft: '1px solid #f1f5f9' }}>
-                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'center' }}>
-                                <div style={{ width: '48px', height: '4px', borderRadius: '9999px', overflow: 'hidden', backgroundColor: '#e2e8f0' }}>
-                                   <div style={{ height: '100%', width: `${pRSO}%`, backgroundColor: pRSO === 100 ? '#10b981' : '#3b82f6' }} />
-                                </div>
-                                <span style={{ fontSize: '10px', fontWeight: '900', color: pRSO === 100 ? '#047857' : '#1d4ed8' }}>{pRSO}%</span>
-                             </div>
-                          </td>
-                          <td style={{ padding: '12px 16px', textAlign: 'center', borderLeft: '1px solid #f1f5f9' }}>
-                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'center' }}>
-                                <div style={{ width: '48px', height: '4px', borderRadius: '9999px', overflow: 'hidden', backgroundColor: '#e2e8f0' }}>
-                                   <div style={{ height: '100%', width: `${pROO}%`, backgroundColor: pROO === 100 ? '#10b981' : '#059669' }} />
-                                </div>
-                                <span style={{ fontSize: '10px', fontWeight: '900', color: pROO === 100 ? '#047857' : '#059669' }}>{pROO}%</span>
-                             </div>
-                          </td>
-                       </tr>
-                    );
-                 })}
-              </tbody>
-           </table>
-        </div>
+          <div style={{ borderRadius: '12px', overflow: 'hidden', marginBottom: '32px', border: '1px solid #e2e8f0' }}>
+             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                   <tr style={{ color: '#ffffff', backgroundColor: '#0f172a' }}>
+                      <th style={{ padding: '12px 16px', textAlign: 'center', fontSize: '10px', fontWeight: '900', textTransform: 'uppercase', letterSpacing: '0.1em', width: '48px' }}>No</th>
+                      <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: '10px', fontWeight: '900', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Nama OPD / Unit Kerja</th>
+                      <th style={{ padding: '12px 16px', textAlign: 'center', fontSize: '10px', fontWeight: '900', textTransform: 'uppercase', letterSpacing: '0.1em', width: '112px' }}>Progress RSO</th>
+                      <th style={{ padding: '12px 16px', textAlign: 'center', fontSize: '10px', fontWeight: '900', textTransform: 'uppercase', letterSpacing: '0.1em', width: '112px' }}>Progress ROO</th>
+                   </tr>
+                </thead>
+                <tbody>
+                   {sortedAccounts
+                    .map((acc, idx) => {
+                      const s = stats[acc.uid] || { strategis: { percent: 0 }, operasional: { percent: 0 } };
+                      const pRSO = s.strategis?.percent || 0;
+                      const pROO = s.operasional?.percent || 0;
+                      return (
+                         <tr key={acc.uid} style={{ backgroundColor: idx % 2 === 0 ? '#ffffff' : '#f8fafc' }}>
+                            <td style={{ padding: '12px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '700', borderRight: '1px solid #f1f5f9', color: '#64748b' }}>{idx + 1}</td>
+                            <td style={{ padding: '12px 16px', fontSize: '12px', fontWeight: '900', textTransform: 'uppercase', letterSpacing: '-0.025em', color: '#1e293b' }}>{acc.username}</td>
+                            <td style={{ padding: '12px 16px', textAlign: 'center', borderLeft: '1px solid #f1f5f9' }}>
+                               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'center' }}>
+                                  <div style={{ width: '48px', height: '4px', borderRadius: '9999px', overflow: 'hidden', backgroundColor: '#e2e8f0' }}>
+                                     <div style={{ height: '100%', width: `${pRSO}%`, backgroundColor: pRSO === 100 ? '#10b981' : '#3b82f6' }} />
+                                  </div>
+                                  <span style={{ fontSize: '10px', fontWeight: '900', color: pRSO === 100 ? '#047857' : '#1d4ed8' }}>{pRSO}%</span>
+                               </div>
+                            </td>
+                            <td style={{ padding: '12px 16px', textAlign: 'center', borderLeft: '1px solid #f1f5f9' }}>
+                               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'center' }}>
+                                  <div style={{ width: '48px', height: '4px', borderRadius: '9999px', overflow: 'hidden', backgroundColor: '#e2e8f0' }}>
+                                     <div style={{ height: '100%', width: `${pROO}%`, backgroundColor: pROO === 100 ? '#10b981' : '#059669' }} />
+                                  </div>
+                                  <span style={{ fontSize: '10px', fontWeight: '900', color: pROO === 100 ? '#047857' : '#059669' }}>{pROO}%</span>
+                               </div>
+                            </td>
+                         </tr>
+                      );
+                   })}
+                </tbody>
+             </table>
+          </div>
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '24px', borderTop: '1px solid #f1f5f9' }}>
-           <p style={{ fontSize: '9px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.1em', fontStyle: 'italic', color: '#94a3b8', margin: 0 }}>
-              Digital Signature: {Math.random().toString(36).substring(2, 10).toUpperCase()}
-           </p>
-           <p style={{ fontSize: '9px', fontWeight: '900', textTransform: 'uppercase', letterSpacing: '0.1em', color: '#0f172a', margin: 0 }}>
-              Generated by ISMAN System
-           </p>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '24px', borderTop: '1px solid #f1f5f9' }}>
+             <p style={{ fontSize: '9px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.1em', fontStyle: 'italic', color: '#94a3b8', margin: 0 }}>
+                Digital Signature: {Math.random().toString(36).substring(2, 10).toUpperCase()}
+             </p>
+             <p style={{ fontSize: '9px', fontWeight: '900', textTransform: 'uppercase', letterSpacing: '0.1em', color: '#0f172a', margin: 0 }}>
+                Generated by ISMAN System
+             </p>
+          </div>
         </div>
       </div>
 
@@ -2566,7 +2606,9 @@ service cloud.firestore {
         <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex flex-wrap gap-4 justify-between items-center">
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-3">
-              <h4 className="font-bold text-slate-700 uppercase italic text-sm">Monitoring Progress Pengisian</h4>
+              <h4 className="font-bold text-slate-700 uppercase italic text-sm">
+                {user.role === 'Administrator' || user.role === 'Operator' ? 'Monitoring Progress Pengisian' : 'Progress Pengisian Risiko OPD Saya'}
+              </h4>
               <button
                 onClick={fetchProgressData}
                 disabled={loading}
@@ -2590,68 +2632,83 @@ service cloud.firestore {
               </button>
             </div>
             
-            <div className="relative ml-2">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={12} />
-              <input 
-                type="text"
-                placeholder="Cari OPD..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-8 pr-4 py-1.5 bg-white border border-slate-200 rounded-lg text-[10px] font-bold outline-none focus:ring-2 focus:ring-blue-500/10 focus:border-blue-500 w-48 transition-all"
-              />
-              {searchQuery && (
-                <button 
-                  onClick={() => setSearchQuery('')}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                >
-                  <X size={10} />
-                </button>
-              )}
-            </div>
+            {(user.role === 'Administrator' || user.role === 'Operator') && (
+              <div className="relative ml-2">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={12} />
+                <input 
+                  type="text"
+                  placeholder="Cari OPD..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-8 pr-4 py-1.5 bg-white border border-slate-200 rounded-lg text-[10px] font-bold outline-none focus:ring-2 focus:ring-blue-500/10 focus:border-blue-500 w-48 transition-all"
+                />
+                {searchQuery && (
+                  <button 
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                  >
+                    <X size={10} />
+                  </button>
+                )}
+              </div>
+            )}
           </div>
           
-          <div className="flex items-center gap-3">
-            <div className="flex bg-slate-100 p-1 rounded-lg gap-1 border border-slate-200">
-               <button 
-                 onClick={handleBulkExcel}
-                 disabled={isExporting}
-                 className="flex items-center gap-2 px-3 py-1 text-[9px] font-black uppercase tracking-wider text-emerald-700 hover:bg-emerald-50 rounded transition-all disabled:opacity-50"
-                 title="Download Seluruh Data OPD (Excel)"
-               >
-                 <Download size={14} /> MASSAL EXCEL
-               </button>
-               <button 
-                 onClick={handleBulkPDF}
-                 disabled={isExporting}
-                 className="flex items-center gap-2 px-3 py-1 text-[9px] font-black uppercase tracking-wider text-red-700 hover:bg-red-50 rounded transition-all disabled:opacity-50"
-                 title="Download Seluruh Data OPD (PDF)"
-               >
-                 <Download size={14} /> MASSAL PDF
-               </button>
-            </div>
-            
-            <div className="flex items-center gap-2 bg-white border border-slate-200 px-3 py-1 rounded-lg">
-              <span className="text-[10px] font-bold text-slate-400">SORT:</span>
-              <select 
-                className="text-[10px] font-bold text-slate-600 bg-transparent outline-none cursor-pointer"
-                value={sortOrder}
-                onChange={(e) => setSortOrder(e.target.value as any)}
-              >
-                <option value="name">Nama (A-Z)</option>
-                <option value="desc">Progress (Tinggi-Rendah)</option>
-                <option value="asc">Progress (Rendah-Tinggi)</option>
-              </select>
-            </div>
+          {(user.role === 'Administrator' || user.role === 'Operator') && (
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex bg-slate-100 p-1 rounded-lg gap-1 border border-slate-200">
+                 <button 
+                   onClick={handleBulkExcel}
+                   disabled={isExporting}
+                   className="flex items-center gap-1.5 px-2.5 py-1 text-[9px] font-black uppercase tracking-wider text-emerald-700 hover:bg-emerald-50 rounded transition-all disabled:opacity-50"
+                   title="Download Seluruh Data OPD (Excel)"
+                 >
+                   <Download size={12} /> MASSAL EXCEL
+                 </button>
+                 <button 
+                   onClick={handleBulkPDF}
+                   disabled={isExporting}
+                   className="flex items-center gap-1.5 px-2.5 py-1 text-[9px] font-black uppercase tracking-wider text-red-700 hover:bg-red-50 rounded transition-all disabled:opacity-50"
+                   title="Download Seluruh Data OPD (PDF)"
+                 >
+                   <Download size={12} /> MASSAL PDF
+                 </button>
+              </div>
+              
+              <div className="flex items-center gap-2 bg-white border border-slate-200 px-3 py-1 rounded-lg">
+                <span className="text-[10px] font-bold text-slate-400">SORT:</span>
+                <select 
+                  className="text-[10px] font-bold text-slate-600 bg-transparent outline-none cursor-pointer"
+                  value={sortOrder}
+                  onChange={(e) => setSortOrder(e.target.value as any)}
+                >
+                  <option value="name">Nama (A-Z)</option>
+                  <option value="desc">Progress (Tinggi-Rendah)</option>
+                  <option value="asc">Progress (Rendah-Tinggi)</option>
+                </select>
+              </div>
 
-            <button 
-              onClick={handleDownloadReport}
-              disabled={isExporting}
-              className="flex items-center gap-2 px-4 py-1.5 bg-slate-900 shadow-lg shadow-slate-200 text-white rounded-lg text-[10px] font-bold uppercase transition-all hover:bg-slate-800 disabled:opacity-50"
-            >
-              <Download size={14} />
-              {isExporting ? 'Exporting...' : 'Unduh Laporan'}
-            </button>
-          </div>
+              {/* TWO SEPARATE REVENUE BUTTONS: JPG and PDF */}
+              <button 
+                onClick={() => handleDownloadReport('jpg')}
+                disabled={isExporting}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 shadow-lg shadow-slate-200 text-white rounded-lg text-[10px] font-bold uppercase transition-all hover:bg-slate-800 disabled:opacity-50 cursor-pointer"
+                title="Download Laporan Progress Gabungan format JPG"
+              >
+                <Download size={12} />
+                {isExporting ? 'Exporting...' : 'Unduh JPG'}
+              </button>
+              <button 
+                onClick={() => handleDownloadReport('pdf')}
+                disabled={isExporting}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-900 shadow-lg shadow-blue-200 text-white rounded-lg text-[10px] font-bold uppercase transition-all hover:bg-blue-800 disabled:opacity-50 cursor-pointer"
+                title="Download Laporan Progress Gabungan format PDF"
+              >
+                <Download size={12} />
+                {isExporting ? 'Exporting...' : 'Unduh PDF'}
+              </button>
+            </div>
+          )}
         </div>
         <div className="p-6">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -7363,7 +7420,7 @@ function MonitoringCommunicationView({ user, isReadOnly, riskType }: { user: any
                 <th className="px-3 py-4 w-40 border-r border-slate-200">Penyedia Informasi</th>
                 <th className="px-3 py-4 w-40 border-r border-slate-200">Penerima Informasi</th>
                 <th className="px-3 py-4 w-32 border-r border-slate-200">Rencana Waktu Pelaksanaan</th>
-                <th className="px-3 py-4 w-32 border-r border-slate-200">Realisasi Waktu Pelaksanaan</th>
+                <th className="px-3 py-4 w-32 border-r border-slate-200 bg-slate-200/90 text-slate-800 font-black italic">Realisasi Waktu Pelaksanaan *</th>
                 <th className="px-3 py-4">Keterangan</th>
               </tr>
             </thead>
@@ -7411,9 +7468,9 @@ function MonitoringCommunicationView({ user, isReadOnly, riskType }: { user: any
                       onChange={(val) => updateCommField(row.id, 'commPlanTime', val)}
                     />
                   </td>
-                  <td className="px-3 py-4 border-r border-slate-200">
+                  <td className="px-3 py-4 border-r border-slate-200 bg-slate-100/95 font-medium">
                     <EditableTextarea 
-                      className="w-full bg-transparent outline-none resize-none disabled:text-slate-500 text-[9px]" 
+                      className="w-full bg-transparent outline-none resize-none disabled:text-slate-600 text-[9px] text-slate-800" 
                       rows={2}
                       placeholder="..."
                       value={row.commRealTime || ''}
@@ -7656,7 +7713,7 @@ function MonitoringPlanPIView({ user, isReadOnly, riskType }: { user: any, isRea
                 <th className="px-3 py-4 w-48 border-r border-slate-200">Bentuk/Metode Pemantauan yang Diperlukan</th>
                 <th className="px-3 py-4 w-40 border-r border-slate-200">Penanggung Jawab Pemantauan</th>
                 <th className="px-3 py-4 w-32 border-r border-slate-200">Rencana Waktu Pelaksanaan Pemantauan</th>
-                <th className="px-3 py-4 w-32 border-r border-slate-200">Realisasi Waktu Pelaksanaan</th>
+                <th className="px-3 py-4 w-32 border-r border-slate-200 bg-slate-200/90 text-slate-800 font-black italic">Realisasi Waktu Pelaksanaan *</th>
                 <th className="px-3 py-4">Keterangan</th>
               </tr>
             </thead>
@@ -7695,10 +7752,10 @@ function MonitoringPlanPIView({ user, isReadOnly, riskType }: { user: any, isRea
                       onChange={(val) => updateMonField(row.id, 'monPlanTime', val)}
                     />
                   </td>
-                  <td className="px-3 py-4 border-r border-slate-200">
+                  <td className="px-3 py-4 border-r border-slate-200 bg-slate-100/95 font-medium">
                     <EditableInput 
                       type="date"
-                      className="w-full bg-transparent outline-none font-bold text-slate-600 cursor-pointer disabled:opacity-50"
+                      className="w-full bg-transparent outline-none font-bold text-slate-800 cursor-pointer disabled:opacity-70"
                       value={row.monRealTime || ''}
                       disabled={isReadOnly}
                       onChange={(val) => updateMonField(row.id, 'monRealTime', val)}
