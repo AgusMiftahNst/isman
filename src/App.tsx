@@ -36,7 +36,16 @@ import {
   FileJson,
   Download,
   ExternalLink,
-  ShieldCheck
+  ShieldCheck,
+  Layers,
+  Coins,
+  Award,
+  Flame,
+  Building2,
+  Landmark,
+  BookOpen,
+  Ban,
+  CalendarCheck
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
@@ -45,6 +54,7 @@ import autoTable from 'jspdf-autotable';
 import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
 import html2canvas from 'html2canvas';
+import { PPBRMasterContainer } from './components/ppbr/PPBRMasterContainer';
 
 // --- Types ---
 
@@ -209,6 +219,23 @@ const MENU_ITEMS_BASE: MenuItem[] = [
   { id: 11, title: 'XI. MANAJEMEN AKUN', icon: LayoutDashboard },
 ];
 
+const PPBR_MENU_ITEMS: MenuItem[] = [
+  { id: 1, title: 'I. AUDIT UNIVERSE', icon: Layers },
+  { id: 2, title: 'II. EVALUASI REGISTER RESIKO', icon: ShieldCheck },
+  { id: 3, title: 'III. TINGKAT KEMATANGAN MR', icon: BarChart3 },
+  { id: 4, title: 'IV. FAKTOR RISIKO ANGGARAN', icon: Coins },
+  { id: 5, title: 'V. FAKTOR PROGRAM UNGGULAN & RPJMN', icon: Award },
+  { id: 6, title: 'VI. FAKTOR TEMUAN, FRAUD & HUKUM', icon: ShieldAlert },
+  { id: 7, title: 'VII. FAKTOR RISIKO ISU TERKINI', icon: Flame },
+  { id: 8, title: 'VIII. PRIORITAS PROGRAM RPJMD', icon: Target },
+  { id: 9, title: 'IX. PRIORITAS UNIT KERJA / OPD', icon: Building2 },
+  { id: 10, title: 'X. PRIORITAS DESA & PUSKESMAS', icon: Landmark },
+  { id: 11, title: 'XI. USULAN PRIORITAS PENGAWASAN', icon: FileText },
+  { id: 12, title: 'XII. AREA PENGAWASAN MANDATORY', icon: BookOpen },
+  { id: 13, title: 'XIII. AREA TIDAK MASUK PKPT', icon: Ban },
+  { id: 14, title: 'XIV. FORMAT PKPT BERBASIS RISIKO', icon: CalendarCheck },
+];
+
 import { initializeApp } from 'firebase/app';
 import { getAuth, onAuthStateChanged, signOut, signInAnonymously } from 'firebase/auth';
 import { getFirestore, collection, query, where, doc, getDoc, setDoc, getDocs, deleteDoc, updateDoc, getDocFromServer, writeBatch, onSnapshot } from 'firebase/firestore';
@@ -230,7 +257,7 @@ export default function App() {
   const [viewingUser, setViewingUser] = useState<{username: string; role: string; uid: string} | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeMenu, setActiveMenu] = useState<number>(0);
-  const [selectedRiskType, setSelectedRiskType] = useState<'strategis' | 'operasional' | null>(null);
+  const [selectedRiskType, setSelectedRiskType] = useState<'strategis' | 'operasional' | 'ppbr' | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [accounts, setAccounts] = useState<any[]>([]);
   const [globalDbError, setGlobalDbError] = useState<string | null>(null);
@@ -244,6 +271,13 @@ export default function App() {
 
   const menuItems = useMemo(() => {
     if (!user) return [];
+    if (selectedRiskType === 'ppbr') {
+      let items = [...PPBR_MENU_ITEMS];
+      if (user.role === 'Administrator') {
+        items.push({ id: 15, title: 'XV. MANAJEMEN AKUN', icon: LayoutDashboard });
+      }
+      return items;
+    }
     let items = [...MENU_ITEMS_BASE];
     
     // Always add MONITORING PROGRESS to the top of the menu list for all users (including individually for each OPD)
@@ -255,7 +289,7 @@ export default function App() {
     }
     
     return items;
-  }, [user]);
+  }, [user, selectedRiskType]);
 
   // Set initial active menu
   useEffect(() => {
@@ -1549,49 +1583,86 @@ export default function App() {
     return <LoginPage onLogin={handleLogin} accounts={accounts} />;
   }
 
+  const isInspektoratUser = user && (
+    user.username.toLowerCase().includes('inspektorat') || 
+    (user.role && user.role.toLowerCase().includes('inspektorat')) ||
+    user.username.toLowerCase() === 'admin' ||
+    user.role === 'Administrator'
+  );
+
   if (user && !selectedRiskType && user.role !== 'Administrator') {
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 bg-[radial-gradient(circle_at_top_right,_var(--tw-gradient-stops))] from-blue-900/20 via-slate-900 to-slate-900">
         <motion.div 
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="w-full max-w-2xl bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-100"
+          className={`w-full ${isInspektoratUser ? 'max-w-4xl' : 'max-w-2xl'} bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-100 transition-all`}
         >
           <div className="p-8 text-center border-b border-slate-100 bg-slate-50">
             <h1 className="text-3xl font-black text-blue-600 tracking-tighter uppercase italic">ISMAN</h1>
             <p className="text-slate-600 text-[10px] font-black uppercase tracking-tight -mt-1 mb-4">Integrated Risk Management System</p>
-            <h2 className="text-xl font-bold text-slate-900 uppercase italic">Pilih Jenis Risiko</h2>
-            <p className="text-slate-500 text-xs mt-1">Silahkan pilih kategori penilaian risiko untuk dilanjutkan</p>
+            <h2 className="text-xl font-bold text-slate-900 uppercase italic">Pilih Kategori Penilaian / Modul</h2>
+            <p className="text-slate-500 text-xs mt-1">Silahkan pilih modul penilaian risiko atau pengawasan untuk dilanjutkan</p>
           </div>
           
-          <div className="p-8 grid grid-cols-1 md:grid-cols-2 gap-6 pb-12">
+          <div className={`p-8 grid grid-cols-1 ${isInspektoratUser ? 'md:grid-cols-3' : 'md:grid-cols-2'} gap-5 pb-12`}>
             <button 
               id="select-strategis"
-              onClick={() => setSelectedRiskType('strategis')}
-              className="group p-8 rounded-xl border-2 border-slate-100 hover:border-blue-500 hover:bg-blue-50 transition-all text-left flex flex-col items-center text-center gap-4"
+              onClick={() => { setSelectedRiskType('strategis'); setActiveMenu(0); }}
+              className="group p-6 rounded-2xl border-2 border-slate-100 hover:border-blue-500 hover:bg-blue-50/50 transition-all text-left flex flex-col items-center text-center gap-3 shadow-xs hover:shadow-md"
             >
-              <div className="w-16 h-16 rounded-full bg-blue-100 flex items-center justify-center group-hover:scale-110 transition-transform">
-                <Target className="w-8 h-8 text-blue-600" />
+              <div className="w-14 h-14 rounded-2xl bg-blue-100 flex items-center justify-center group-hover:scale-110 transition-transform">
+                <Target className="w-7 h-7 text-blue-600" />
               </div>
               <div>
-                <h3 className="font-black text-slate-900 text-lg uppercase">Risiko Strategis</h3>
-                <p className="text-xs text-slate-500 mt-2">Penilaian risiko terkait pencapaian sasaran strategis instansi</p>
+                <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-[10px] font-extrabold uppercase tracking-wider mb-1 inline-block">
+                  RSO
+                </span>
+                <h3 className="font-black text-slate-900 text-base uppercase">Risiko Strategis</h3>
+                <p className="text-xs text-slate-500 mt-1 leading-relaxed">Penilaian risiko terkait pencapaian sasaran strategis instansi</p>
               </div>
             </button>
 
             <button 
               id="select-operasional"
-              onClick={() => setSelectedRiskType('operasional')}
-              className="group p-8 rounded-xl border-2 border-slate-100 hover:border-emerald-500 hover:bg-emerald-50 transition-all text-left flex flex-col items-center text-center gap-4"
+              onClick={() => { setSelectedRiskType('operasional'); setActiveMenu(0); }}
+              className="group p-6 rounded-2xl border-2 border-slate-100 hover:border-emerald-500 hover:bg-emerald-50/50 transition-all text-left flex flex-col items-center text-center gap-3 shadow-xs hover:shadow-md"
             >
-              <div className="w-16 h-16 rounded-full bg-emerald-100 flex items-center justify-center group-hover:scale-110 transition-transform">
-                <Settings2 className="w-8 h-8 text-emerald-600" />
+              <div className="w-14 h-14 rounded-2xl bg-emerald-100 flex items-center justify-center group-hover:scale-110 transition-transform">
+                <Settings2 className="w-7 h-7 text-emerald-600" />
               </div>
               <div>
-                <h3 className="font-black text-slate-900 text-lg uppercase">Risiko Operasional</h3>
-                <p className="text-xs text-slate-500 mt-2">Penilaian risiko terkait proses bisnis dan kegiatan operasional</p>
+                <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full text-[10px] font-extrabold uppercase tracking-wider mb-1 inline-block">
+                  ROO
+                </span>
+                <h3 className="font-black text-slate-900 text-base uppercase">Risiko Operasional</h3>
+                <p className="text-xs text-slate-500 mt-1 leading-relaxed">Penilaian risiko terkait proses bisnis dan kegiatan operasional</p>
               </div>
             </button>
+
+            {isInspektoratUser && (
+              <button 
+                id="select-ppbr"
+                onClick={() => { setSelectedRiskType('ppbr'); setActiveMenu(1); }}
+                className="group p-6 rounded-2xl border-2 border-teal-200 hover:border-teal-500 bg-teal-50/30 hover:bg-teal-50 transition-all text-left flex flex-col items-center text-center gap-3 shadow-xs hover:shadow-md relative overflow-hidden"
+              >
+                <div className="absolute top-3 right-3">
+                  <span className="px-2 py-0.5 bg-teal-600 text-white rounded-full text-[9px] font-extrabold uppercase tracking-wider shadow-xs">
+                    APIP
+                  </span>
+                </div>
+                <div className="w-14 h-14 rounded-2xl bg-teal-100 flex items-center justify-center group-hover:scale-110 transition-transform">
+                  <ShieldCheck className="w-7 h-7 text-teal-700" />
+                </div>
+                <div>
+                  <span className="px-2 py-0.5 bg-teal-100 text-teal-800 rounded-full text-[10px] font-extrabold uppercase tracking-wider mb-1 inline-block">
+                    PPBR 14 LAMPIRAN
+                  </span>
+                  <h3 className="font-black text-slate-900 text-base uppercase">PPBR Pengawasan</h3>
+                  <p className="text-xs text-slate-500 mt-1 leading-relaxed">Perencanaan Pengawasan Berbasis Risiko Inspektorat (14 Kertas Kerja Lampiran)</p>
+                </div>
+              </button>
+            )}
           </div>
         </motion.div>
       </div>
@@ -1704,14 +1775,14 @@ export default function App() {
               {menuItems.find(m => m.id === activeMenu)?.title}
               {selectedRiskType && (
                 <div className="flex items-center gap-2">
-                  <span className="text-blue-600">
-                    ({selectedRiskType === 'operasional' ? 'OPERASIONAL' : 'STRATEGIS'})
+                  <span className={selectedRiskType === 'ppbr' ? 'text-teal-600 font-extrabold' : 'text-blue-600'}>
+                    ({selectedRiskType === 'operasional' ? 'OPERASIONAL' : selectedRiskType === 'ppbr' ? 'PPBR - PENGAWASAN BERBASIS RISIKO' : 'STRATEGIS'})
                   </span>
                   {user.role !== 'Administrator' && (
                     <button 
                       onClick={() => setSelectedRiskType(null)}
-                      className="p-1 hover:bg-blue-50 text-blue-400 hover:text-blue-600 rounded-lg transition-all"
-                      title="Ganti Mode Risiko"
+                      className="p-1 hover:bg-slate-100 text-slate-400 hover:text-slate-700 rounded-lg transition-all"
+                      title="Ganti Kategori / Modul Risiko"
                     >
                       <RotateCw size={14} />
                     </button>
@@ -1789,14 +1860,27 @@ service cloud.firestore {
 
           <AnimatePresence mode="wait">
             <motion.div
-              key={activeMenu}
+              key={`${selectedRiskType}-${activeMenu}`}
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
               transition={{ duration: 0.2 }}
               className="max-w-7xl mx-auto"
             >
-              {activeMenu === 0 ? (
+              {selectedRiskType === 'ppbr' ? (
+                activeMenu === 15 ? (
+                  <AccountManagementView accounts={accounts} />
+                ) : (
+                  <PPBRMasterContainer 
+                    activeSubMenu={`ppbr-${activeMenu || 1}`}
+                    onSelectSubMenu={(subId) => {
+                      const num = parseInt(subId.replace('ppbr-', '')) || 1;
+                      setActiveMenu(num);
+                    }}
+                    onBackToRiskSelection={() => setSelectedRiskType(null)}
+                  />
+                )
+              ) : activeMenu === 0 ? (
                 <MonitoringProgressView user={user!} onSelectUser={(u, rt) => { setViewingUser(u); setSelectedRiskType(rt); setActiveMenu(1); }} />
               ) : activeMenu === 1 ? (
                 <ContextSettingView user={viewingUser!} isReadOnly={isActuallyReadOnly} riskType={selectedRiskType || 'strategis'} isAdmin={user?.role === 'Administrator'} />
@@ -2421,6 +2505,44 @@ function MonitoringProgressView({ user, onSelectUser }: { user: any, onSelectUse
     });
   }, [accounts, stats, sortOrder, searchQuery, user.role, user.uid]);
 
+  const recapData = useMemo(() => {
+    const total = sortedAccounts.length;
+    
+    // RSO Counts
+    const rsoBelum = sortedAccounts.filter(acc => {
+      const s = stats[acc.uid]?.strategis?.percent || 0;
+      return s < 89;
+    }).length;
+    const rsoBelumTtd = sortedAccounts.filter(acc => {
+      const s = stats[acc.uid]?.strategis?.percent || 0;
+      return s === 89;
+    }).length;
+    const rsoSelesai = sortedAccounts.filter(acc => {
+      const s = stats[acc.uid]?.strategis?.percent || 0;
+      return s === 100;
+    }).length;
+
+    // ROO Counts
+    const rooBelum = sortedAccounts.filter(acc => {
+      const s = stats[acc.uid]?.operasional?.percent || 0;
+      return s < 89;
+    }).length;
+    const rooBelumTtd = sortedAccounts.filter(acc => {
+      const s = stats[acc.uid]?.operasional?.percent || 0;
+      return s === 89;
+    }).length;
+    const rooSelesai = sortedAccounts.filter(acc => {
+      const s = stats[acc.uid]?.operasional?.percent || 0;
+      return s === 100;
+    }).length;
+
+    return {
+      total,
+      rso: { belum: rsoBelum, belumTtd: rsoBelumTtd, selesai: rsoSelesai },
+      roo: { belum: rooBelum, belumTtd: rooBelumTtd, selesai: rooSelesai }
+    };
+  }, [sortedAccounts, stats]);
+
   const handleDownloadReport = async (format: 'jpg' | 'pdf') => {
     setIsExporting(true);
     try {
@@ -2547,6 +2669,65 @@ service cloud.firestore {
                 <p style={{ fontSize: '14px', fontWeight: '700', color: '#0f172a', margin: 0 }}>{new Date().toLocaleString('id-ID')}</p>
              </div>
           </div>
+
+          {/* REKAPITULASI PROGRES PENGISIAN */}
+          {(user.role === 'Administrator' || user.role === 'Operator') && (
+            <div style={{ display: 'flex', gap: '10px', marginBottom: '24px' }}>
+               {/* TOTAL OPD CARD */}
+               <div style={{ flex: '0.8', backgroundColor: '#f8fafc', padding: '10px 12px', borderRadius: '8px', border: '1px solid #e2e8f0', textAlign: 'center', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                  <p style={{ fontSize: '8.5px', fontWeight: '800', textTransform: 'uppercase', color: '#64748b', margin: '0 0 2px 0', letterSpacing: '0.05em' }}>TOTAL OPD</p>
+                  <span style={{ fontSize: '22px', fontWeight: '900', color: '#0f172a', lineHeight: '1.2' }}>{recapData.total}</span>
+               </div>
+
+               {/* CARD 1: BELUM SELESAI */}
+               <div style={{ flex: '1.4', backgroundColor: '#fff5f5', padding: '10px 12px', borderRadius: '8px', border: '1px solid #fecdd3', textAlign: 'center' }}>
+                  <p style={{ fontSize: '8.5px', fontWeight: '800', textTransform: 'uppercase', color: '#e11d48', margin: '0 0 6px 0', letterSpacing: '0.05em' }}>BELUM SELESAI (&lt; 89%)</p>
+                  <div style={{ display: 'flex', justifyContent: 'space-around', alignItems: 'center' }}>
+                     <div>
+                        <p style={{ fontSize: '7px', color: '#1d4ed8', margin: 0, fontWeight: '700' }}>RSO (BIRU)</p>
+                        <span style={{ fontSize: '15px', fontWeight: '900', color: '#1d4ed8' }}>{recapData.rso.belum} <span style={{ fontSize: '8.5px', fontWeight: 'normal', color: '#64748b' }}>OPD</span></span>
+                     </div>
+                     <div style={{ width: '1px', height: '24px', backgroundColor: '#fecdd3' }} />
+                     <div>
+                        <p style={{ fontSize: '7px', color: '#059669', margin: 0, fontWeight: '700' }}>ROO (HIJAU)</p>
+                        <span style={{ fontSize: '15px', fontWeight: '900', color: '#059669' }}>{recapData.roo.belum} <span style={{ fontSize: '8.5px', fontWeight: 'normal', color: '#64748b' }}>OPD</span></span>
+                     </div>
+                  </div>
+               </div>
+
+               {/* CARD 2: BELUM TTD */}
+               <div style={{ flex: '1.4', backgroundColor: '#fffbeb', padding: '10px 12px', borderRadius: '8px', border: '1px solid #fef08a', textAlign: 'center' }}>
+                  <p style={{ fontSize: '8.5px', fontWeight: '800', textTransform: 'uppercase', color: '#d97706', margin: '0 0 6px 0', letterSpacing: '0.05em' }}>SELESAI BELUM TTD (89%)</p>
+                  <div style={{ display: 'flex', justifyContent: 'space-around', alignItems: 'center' }}>
+                     <div>
+                        <p style={{ fontSize: '7px', color: '#1d4ed8', margin: 0, fontWeight: '700' }}>RSO (BIRU)</p>
+                        <span style={{ fontSize: '15px', fontWeight: '900', color: '#1d4ed8' }}>{recapData.rso.belumTtd} <span style={{ fontSize: '8.5px', fontWeight: 'normal', color: '#64748b' }}>OPD</span></span>
+                     </div>
+                     <div style={{ width: '1px', height: '24px', backgroundColor: '#fde047' }} />
+                     <div>
+                        <p style={{ fontSize: '7px', color: '#059669', margin: 0, fontWeight: '700' }}>ROO (HIJAU)</p>
+                        <span style={{ fontSize: '15px', fontWeight: '900', color: '#059669' }}>{recapData.roo.belumTtd} <span style={{ fontSize: '8.5px', fontWeight: 'normal', color: '#64748b' }}>OPD</span></span>
+                     </div>
+                  </div>
+               </div>
+
+               {/* CARD 3: SUDAH SELESAI */}
+               <div style={{ flex: '1.4', backgroundColor: '#ecfdf5', padding: '10px 12px', borderRadius: '8px', border: '1px solid #a7f3d0', textAlign: 'center' }}>
+                  <p style={{ fontSize: '8.5px', fontWeight: '800', textTransform: 'uppercase', color: '#059669', margin: '0 0 6px 0', letterSpacing: '0.05em' }}>SUDAH SELESAI (100%)</p>
+                  <div style={{ display: 'flex', justifyContent: 'space-around', alignItems: 'center' }}>
+                     <div>
+                        <p style={{ fontSize: '7px', color: '#1d4ed8', margin: 0, fontWeight: '700' }}>RSO (BIRU)</p>
+                        <span style={{ fontSize: '15px', fontWeight: '900', color: '#1d4ed8' }}>{recapData.rso.selesai} <span style={{ fontSize: '8.5px', fontWeight: 'normal', color: '#64748b' }}>OPD</span></span>
+                     </div>
+                     <div style={{ width: '1px', height: '24px', backgroundColor: '#a7f3d0' }} />
+                     <div>
+                        <p style={{ fontSize: '7px', color: '#059669', margin: 0, fontWeight: '700' }}>ROO (HIJAU)</p>
+                        <span style={{ fontSize: '15px', fontWeight: '900', color: '#059669' }}>{recapData.roo.selesai} <span style={{ fontSize: '8.5px', fontWeight: 'normal', color: '#64748b' }}>OPD</span></span>
+                     </div>
+                  </div>
+               </div>
+            </div>
+          )}
 
           <div style={{ borderRadius: '12px', overflow: 'hidden', marginBottom: '32px', border: '1px solid #e2e8f0' }}>
              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
