@@ -13,9 +13,16 @@ import {
   CheckCircle2,
   Layers,
   GitMerge,
-  Split,
-  RefreshCw
+  Split
 } from 'lucide-react';
+
+const DEFAULT_INDIKATOR_TUJUAN: Record<string, string> = {
+  'Meningkatkan Kualitas Sumber Daya Manusia yang Berdaya Saing dan Berakhlak Mulia': 'Indeks Pembangunan Manusia (IPM)',
+  'Mewujudkan Pertumbuhan Ekonomi Daerah yang Inklusif, Berkelanjutan dan Berdaya Saing': 'Laju Pertumbuhan Ekonomi (LPE)',
+  'Mewujudkan Tata Kelola Pemerintahan yang Bersih, Akuntabel, Efektif, Efisien dan Melayani': 'Indeks Reformasi Birokrasi (IRB)',
+  'Meningkatkan Kualitas dan Pemerataan Infrastruktur Wilayah Serta Kelestarian Lingkungan Hidup': 'Indeks Kualitas Lingkungan Hidup (IKLH) & Indeks Infrastruktur',
+  'Meningkatkan Ketenteraman, Ketertiban Umum, Penanganan Kemiskinan dan Kesejahteraan Sosial': 'Tingkat Kemiskinan & Indeks Ketenteraman dan Ketertiban'
+};
 
 export const AuditUniverseView: React.FC = () => {
   const [data, setData] = useState<AuditUniverseItem[]>(() => {
@@ -23,7 +30,13 @@ export const AuditUniverseView: React.FC = () => {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.map((item: any) => ({
+            ...item,
+            indikatorSasaranRpjmd: item.indikatorSasaranRpjmd || '',
+            indikatorTujuanRpjmd: item.indikatorTujuanRpjmd || DEFAULT_INDIKATOR_TUJUAN[item.tujuanRpjmd] || ''
+          }));
+        }
       } catch (e) {
         console.error('Failed to parse ppbr_audit_universe', e);
       }
@@ -113,8 +126,134 @@ export const AuditUniverseView: React.FC = () => {
     handleSaveData(updated);
   };
 
-  // Add program under an existing Tujuan & Sasaran
-  const handleAddProgramUnderSasaran = (tujuan: string, sasaran: string, indSasaran: string, indTujuan: string, afterIndex: number) => {
+  // Add a new Indikator Tujuan under an existing Tujuan (Tujuan will remain merged)
+  const handleAddIndikatorUnderTujuan = (
+    tujuan: string,
+    afterIndex: number
+  ) => {
+    const newRow: AuditUniverseItem = {
+      id: `au-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      no: data.length + 1,
+      tujuanRpjmd: tujuan,
+      indikatorTujuanRpjmd: '',
+      sasaranRpjmd: '',
+      indikatorSasaranRpjmd: '',
+      programRpjmd: '',
+      indikatorProgramRpjmd: '',
+      opdPengampu: '',
+      irbanPengampu: 'Irban I',
+      tujuanSasaranRenstra: '',
+      indikatorRenstra: '',
+      programRenstra: '',
+      indikatorProgramRenstra: '',
+      anggaran: 0,
+      prioritasRpjmn: '',
+      sektorUnggulan: 'Bukan sektor unggulan daerah',
+      temuanFraudHukum: '',
+      isuTerkini: ''
+    };
+
+    const targetItem = filteredData[afterIndex];
+    const originalIndex = data.findIndex(d => d.id === targetItem?.id);
+    const updated = [...data];
+    if (originalIndex !== -1) {
+      updated.splice(originalIndex + 1, 0, newRow);
+    } else {
+      updated.push(newRow);
+    }
+    const renumbered = updated.map((item, idx) => ({ ...item, no: idx + 1 }));
+    handleSaveData(renumbered);
+  };
+
+  // Add a new Sasaran under an existing Indikator Tujuan (Tujuan & Indikator Tujuan will merge)
+  const handleAddSasaranUnderIndikatorTujuan = (
+    tujuan: string,
+    indTujuan: string,
+    afterIndex: number
+  ) => {
+    const newRow: AuditUniverseItem = {
+      id: `au-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      no: data.length + 1,
+      tujuanRpjmd: tujuan,
+      indikatorTujuanRpjmd: indTujuan || '',
+      sasaranRpjmd: '',
+      indikatorSasaranRpjmd: '',
+      programRpjmd: '',
+      indikatorProgramRpjmd: '',
+      opdPengampu: '',
+      irbanPengampu: 'Irban I',
+      tujuanSasaranRenstra: '',
+      indikatorRenstra: '',
+      programRenstra: '',
+      indikatorProgramRenstra: '',
+      anggaran: 0,
+      prioritasRpjmn: '',
+      sektorUnggulan: 'Bukan sektor unggulan daerah',
+      temuanFraudHukum: '',
+      isuTerkini: ''
+    };
+
+    const targetItem = filteredData[afterIndex];
+    const originalIndex = data.findIndex(d => d.id === targetItem?.id);
+    const updated = [...data];
+    if (originalIndex !== -1) {
+      updated.splice(originalIndex + 1, 0, newRow);
+    } else {
+      updated.push(newRow);
+    }
+    const renumbered = updated.map((item, idx) => ({ ...item, no: idx + 1 }));
+    handleSaveData(renumbered);
+  };
+
+  // Add a new Indikator Sasaran under an existing Sasaran (Tujuan & Sasaran will be merged)
+  const handleAddIndikatorUnderSasaran = (
+    tujuan: string,
+    sasaran: string,
+    indTujuan: string,
+    afterIndex: number
+  ) => {
+    const newRow: AuditUniverseItem = {
+      id: `au-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      no: data.length + 1,
+      tujuanRpjmd: tujuan,
+      indikatorTujuanRpjmd: indTujuan || '',
+      sasaranRpjmd: sasaran,
+      indikatorSasaranRpjmd: '',
+      programRpjmd: '',
+      indikatorProgramRpjmd: '',
+      opdPengampu: '',
+      irbanPengampu: 'Irban I',
+      tujuanSasaranRenstra: '',
+      indikatorRenstra: '',
+      programRenstra: '',
+      indikatorProgramRenstra: '',
+      anggaran: 0,
+      prioritasRpjmn: '',
+      sektorUnggulan: 'Bukan sektor unggulan daerah',
+      temuanFraudHukum: '',
+      isuTerkini: ''
+    };
+
+    const targetItem = filteredData[afterIndex];
+    const originalIndex = data.findIndex(d => d.id === targetItem?.id);
+    const updated = [...data];
+    if (originalIndex !== -1) {
+      updated.splice(originalIndex + 1, 0, newRow);
+    } else {
+      updated.push(newRow);
+    }
+    const renumbered = updated.map((item, idx) => ({ ...item, no: idx + 1 }));
+    handleSaveData(renumbered);
+  };
+
+  // Add program under an existing Indikator Sasaran (Tujuan, Sasaran, and Indikator Sasaran will merge)
+  const handleAddProgramUnderIndikator = (
+    tujuan: string,
+    sasaran: string,
+    indSasaran: string,
+    indTujuan: string,
+    afterIndex: number
+  ) => {
     const newRow: AuditUniverseItem = {
       id: `au-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       no: data.length + 1,
@@ -225,21 +364,6 @@ export const AuditUniverseView: React.FC = () => {
     });
   };
 
-  // Request Reload template RPJMD with confirmation dialog
-  const requestReloadTemplateData = () => {
-    setConfirmModal({
-      isOpen: true,
-      title: 'Muat Ulang Data Standar RPJMD?',
-      message: 'Apakah Anda yakin ingin memuat ulang 52 data dasar standar RPJMD? Data di tabel saat ini akan ditimpa dengan data template standar.',
-      detail: 'Tujuan RPJMD, Sasaran RPJMD, Indikator Sasaran, dan 52 Program RPJMD standar daerah akan dimuat kembali ke tabel.',
-      confirmText: 'Ya, Muat Ulang Data',
-      variant: 'warning',
-      onConfirm: () => {
-        handleSaveData(INITIAL_AUDIT_UNIVERSE);
-      }
-    });
-  };
-
   // Filtered data
   const filteredData = useMemo(() => {
     return data.filter(item => {
@@ -259,11 +383,24 @@ export const AuditUniverseView: React.FC = () => {
   const spanInfo = useMemo(() => {
     const tujuanSpan: { [index: number]: number } = {};
     const tujuanIndices: { [index: number]: number[] } = {};
+    const indikatorTujuanSpan: { [index: number]: number } = {};
+    const indikatorTujuanIndices: { [index: number]: number[] } = {};
     const sasaranSpan: { [index: number]: number } = {};
     const sasaranIndices: { [index: number]: number[] } = {};
+    const indikatorSpan: { [index: number]: number } = {};
+    const indikatorIndices: { [index: number]: number[] } = {};
 
     if (!mergeViewMode) {
-      return { tujuanSpan, tujuanIndices, sasaranSpan, sasaranIndices };
+      return {
+        tujuanSpan,
+        tujuanIndices,
+        indikatorTujuanSpan,
+        indikatorTujuanIndices,
+        sasaranSpan,
+        sasaranIndices,
+        indikatorSpan,
+        indikatorIndices
+      };
     }
 
     let i = 0;
@@ -287,34 +424,102 @@ export const AuditUniverseView: React.FC = () => {
         tujuanSpan[k] = 0; // mark as hidden
       }
 
-      // Inside this tujuan group, calculate sasaran span
-      let sStart = i;
-      while (sStart < j) {
-        const currentSasaran = (filteredData[sStart].sasaranRpjmd || '').trim();
-        let sEnd = sStart + 1;
-        const sIndices = [sStart];
+      // Inside this tujuan group, calculate indikatorTujuan span
+      let tIndStart = i;
+      while (tIndStart < j) {
+        const curIndT = (filteredData[tIndStart].indikatorTujuanRpjmd || '').trim();
+        let tIndEnd = tIndStart + 1;
+        const indTIndices = [tIndStart];
 
-        if (currentSasaran !== '') {
-          while (sEnd < j && (filteredData[sEnd].sasaranRpjmd || '').trim() === currentSasaran) {
-            sIndices.push(sEnd);
-            sEnd++;
+        if (curIndT !== '') {
+          while (
+            tIndEnd < j &&
+            (filteredData[tIndEnd].indikatorTujuanRpjmd || '').trim() === curIndT
+          ) {
+            indTIndices.push(tIndEnd);
+            tIndEnd++;
           }
         }
 
-        const sSpan = sEnd - sStart;
-        sasaranSpan[sStart] = sSpan;
-        sasaranIndices[sStart] = sIndices;
+        const indTSpan = tIndEnd - tIndStart;
+        indikatorTujuanSpan[tIndStart] = indTSpan;
+        indikatorTujuanIndices[tIndStart] = indTIndices;
 
-        for (let sk = sStart + 1; sk < sEnd; sk++) {
-          sasaranSpan[sk] = 0; // mark as hidden
+        for (let tk = tIndStart + 1; tk < tIndEnd; tk++) {
+          indikatorTujuanSpan[tk] = 0; // mark as hidden
         }
-        sStart = sEnd;
+
+        // Inside this indikatorTujuan group, calculate sasaran span
+        let sStart = tIndStart;
+        while (sStart < tIndEnd) {
+          const currentSasaran = (filteredData[sStart].sasaranRpjmd || '').trim();
+          let sEnd = sStart + 1;
+          const sIndices = [sStart];
+
+          if (currentSasaran !== '') {
+            while (
+              sEnd < tIndEnd &&
+              (filteredData[sEnd].sasaranRpjmd || '').trim() === currentSasaran
+            ) {
+              sIndices.push(sEnd);
+              sEnd++;
+            }
+          }
+
+          const sSpan = sEnd - sStart;
+          sasaranSpan[sStart] = sSpan;
+          sasaranIndices[sStart] = sIndices;
+
+          for (let sk = sStart + 1; sk < sEnd; sk++) {
+            sasaranSpan[sk] = 0; // mark as hidden
+          }
+
+          // Inside this sasaran group, calculate indikator span
+          let indStart = sStart;
+          while (indStart < sEnd) {
+            const curInd = (filteredData[indStart].indikatorSasaranRpjmd || '').trim();
+            let indEnd = indStart + 1;
+            const indIndices = [indStart];
+
+            if (curInd !== '') {
+              while (
+                indEnd < sEnd &&
+                (filteredData[indEnd].indikatorSasaranRpjmd || '').trim() === curInd
+              ) {
+                indIndices.push(indEnd);
+                indEnd++;
+              }
+            }
+
+            const indSpan = indEnd - indStart;
+            indikatorSpan[indStart] = indSpan;
+            indikatorIndices[indStart] = indIndices;
+
+            for (let ik = indStart + 1; ik < indEnd; ik++) {
+              indikatorSpan[ik] = 0;
+            }
+            indStart = indEnd;
+          }
+
+          sStart = sEnd;
+        }
+
+        tIndStart = tIndEnd;
       }
 
       i = j;
     }
 
-    return { tujuanSpan, tujuanIndices, sasaranSpan, sasaranIndices };
+    return {
+      tujuanSpan,
+      tujuanIndices,
+      indikatorTujuanSpan,
+      indikatorTujuanIndices,
+      sasaranSpan,
+      sasaranIndices,
+      indikatorSpan,
+      indikatorIndices
+    };
   }, [filteredData, mergeViewMode]);
 
   const totalAnggaran = data.reduce((acc, curr) => acc + (Number(curr.anggaran) || 0), 0);
@@ -327,7 +532,7 @@ export const AuditUniverseView: React.FC = () => {
       { header: 'Tujuan RPJMD', key: 'tujuanRpjmd', width: 30 },
       { header: 'Indikator Tujuan', key: 'indikatorTujuanRpjmd', width: 24 },
       { header: 'Sasaran RPJMD', key: 'sasaranRpjmd', width: 30 },
-      { header: 'Indikator Sasaran', key: 'indikatorSasaranRpjmd', width: 24 },
+      { header: 'Indikator Sasaran', key: 'indikatorSasaranRpjmd', width: 28 },
       { header: 'Program RPJMD', key: 'programRpjmd', width: 30 },
       { header: 'Indikator Program', key: 'indikatorProgramRpjmd', width: 24 },
       { header: 'OPD/Unit Pengampu', key: 'opdPengampu', width: 26 },
@@ -345,12 +550,17 @@ export const AuditUniverseView: React.FC = () => {
       { header: 'Isu Terkini', key: 'isuTerkini', width: 28 }
     ];
 
+    const exportData = data.map(item => ({
+      ...item,
+      indikatorSasaranRpjmd: item.indikatorSasaranRpjmd || '-'
+    }));
+
     exportToExcel(
       'Lampiran_1_Audit_Universe',
       'LAMPIRAN 1: KERTAS KERJA AUDIT UNIVERSE',
       'Pemetaan Hubungan RPJMD, Rencana Strategis (Renstra) OPD, dan Faktor-Faktor Risiko',
       cols,
-      data
+      exportData
     );
   };
 
@@ -411,7 +621,7 @@ export const AuditUniverseView: React.FC = () => {
               Kertas Kerja Audit Universe
             </h1>
             <p className="text-slate-300 text-sm mt-1 max-w-3xl">
-              Pemetaan menyeluruh ruang lingkup pengawasan (auditable units). Pengisian dapat dilakukan langsung pada setiap sel tabel di bawah ini. Baris dengan Tujuan &amp; Sasaran RPJMD yang sama otomatis digabung (merged).
+              Pemetaan menyeluruh ruang lingkup pengawasan (auditable units). Pengisian dapat dilakukan langsung pada setiap sel tabel di bawah ini. Satu Sasaran RPJMD dapat memuat lebih dari satu Indikator Sasaran melalui fitur penggabungan baris (merge). Baris dengan Tujuan, Sasaran, atau Indikator yang sama otomatis digabung.
             </p>
           </div>
 
@@ -431,14 +641,6 @@ export const AuditUniverseView: React.FC = () => {
             >
               {mergeViewMode ? <GitMerge className="w-4 h-4 text-blue-200" /> : <Split className="w-4 h-4" />}
               <span>{mergeViewMode ? 'Merge Baris: ON' : 'Merge Baris: OFF'}</span>
-            </button>
-            <button
-              onClick={requestReloadTemplateData}
-              className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition shadow-xs"
-              title="Muat ulang seluruh data standar Tujuan, Sasaran, Indikator Sasaran, dan Program RPJMD"
-            >
-              <RefreshCw className="w-4 h-4" />
-              <span>Muat Data RPJMD</span>
             </button>
             <button
               onClick={handleExportExcel}
@@ -555,7 +757,7 @@ export const AuditUniverseView: React.FC = () => {
                 <th className="p-2.5 min-w-[220px] border-r border-slate-700 bg-blue-950/90 text-blue-200">Tujuan RPJMD</th>
                 <th className="p-2.5 min-w-[180px] border-r border-slate-700 bg-blue-950/90 text-blue-200">Indikator Tujuan</th>
                 <th className="p-2.5 min-w-[220px] border-r border-slate-700 bg-blue-950/90 text-blue-200">Sasaran RPJMD</th>
-                <th className="p-2.5 min-w-[180px] border-r border-slate-700 bg-blue-950/90 text-blue-200">Indikator Sasaran</th>
+                <th className="p-2.5 min-w-[240px] border-r border-slate-700 bg-blue-950/90 text-blue-200">Indikator Sasaran</th>
                 <th className="p-2.5 min-w-[220px] border-r border-slate-700 bg-blue-950/90 text-blue-200">Program RPJMD</th>
                 <th className="p-2.5 min-w-[180px] border-r border-slate-700 bg-blue-950/90 text-blue-200">Indikator Program</th>
                 <th className="p-2.5 min-w-[200px] border-r border-slate-700 bg-blue-950/90 text-blue-200">OPD/Unit Pengampu</th>
@@ -593,9 +795,17 @@ export const AuditUniverseView: React.FC = () => {
                   const showTujuan = tSpan > 0;
                   const tIndices = spanInfo.tujuanIndices[index] || [index];
 
+                  const indTSpan = spanInfo.indikatorTujuanSpan?.[index] ?? 1;
+                  const showIndikatorTujuan = indTSpan > 0;
+                  const indTIndices = spanInfo.indikatorTujuanIndices?.[index] || [index];
+
                   const sSpan = spanInfo.sasaranSpan[index] ?? 1;
                   const showSasaran = sSpan > 0;
                   const sIndices = spanInfo.sasaranIndices[index] || [index];
+
+                  const indSpan = spanInfo.indikatorSpan[index] ?? 1;
+                  const showIndikator = indSpan > 0;
+                  const indIndices = spanInfo.indikatorIndices[index] || [index];
 
                   return (
                     <tr
@@ -613,54 +823,104 @@ export const AuditUniverseView: React.FC = () => {
                       {showTujuan && (
                         <td
                           rowSpan={tSpan}
-                          className={`p-2 border-r border-slate-200 align-top ${
+                          className={`p-2 border-r border-slate-200 align-top min-w-[220px] ${
                             tSpan > 1 ? 'bg-blue-50/40' : 'bg-transparent'
                           }`}
                         >
-                          <div className="flex flex-col h-full justify-between gap-2">
-                            <textarea
-                              rows={Math.max(2, tSpan * 2)}
-                              value={item.tujuanRpjmd || ''}
-                              onChange={e => {
-                                if (tSpan > 1) {
-                                  handleMergedCellChange('tujuanRpjmd', tIndices, e.target.value);
-                                } else {
-                                  handleCellChange(item.id, 'tujuanRpjmd', e.target.value);
+                          <div className="flex flex-col h-full justify-between gap-1.5">
+                            <div>
+                              <textarea
+                                rows={Math.max(2, tSpan * 2)}
+                                value={item.tujuanRpjmd || ''}
+                                onChange={e => {
+                                  if (tSpan > 1) {
+                                    handleMergedCellChange('tujuanRpjmd', tIndices, e.target.value);
+                                  } else {
+                                    handleCellChange(item.id, 'tujuanRpjmd', e.target.value);
+                                  }
+                                }}
+                                placeholder="Uraian Tujuan RPJMD..."
+                                className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-blue-500 rounded-md text-xs font-semibold text-slate-900 resize-y focus:outline-hidden transition leading-relaxed"
+                              />
+                              {tSpan > 1 && (
+                                <div className="text-[10px] text-blue-700 font-medium px-1.5 py-0.5 bg-blue-100/60 rounded inline-flex items-center gap-1 mt-1">
+                                  <Layers className="w-3 h-3 text-blue-600" />
+                                  <span>{tSpan} Program</span>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Tombol tambah Indikator Tujuan baru di bawah tujuan ini */}
+                            <div className="pt-1.5 border-t border-blue-200/50 flex flex-wrap items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleAddIndikatorUnderTujuan(
+                                    item.tujuanRpjmd || '',
+                                    index + tSpan - 1
+                                  )
                                 }
-                              }}
-                              placeholder="Uraian Tujuan RPJMD..."
-                              className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-blue-500 rounded-md text-xs font-semibold text-slate-900 resize-y focus:outline-hidden transition leading-relaxed"
-                            />
-                            {tSpan > 1 && (
-                              <div className="text-[10px] text-blue-700 font-medium px-2 py-0.5 bg-blue-100/60 rounded self-start">
-                                {tSpan} Program
-                              </div>
-                            )}
+                                className="text-[10px] text-blue-700 hover:text-blue-800 font-semibold px-2 py-1 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded self-start flex items-center gap-1 transition shadow-2xs"
+                                title="Tambah baris Indikator Tujuan baru di bawah tujuan ini (Tujuan tetap digabung)"
+                              >
+                                <Plus className="w-3 h-3" />
+                                <span>+ Indikator Baru</span>
+                              </button>
+                            </div>
                           </div>
                         </td>
                       )}
 
-                      {/* RPJMD: Indikator Tujuan (Merged if identical) */}
-                      {showTujuan && (
+                      {/* RPJMD: Indikator Tujuan (Merged if identical within Tujuan) */}
+                      {showIndikatorTujuan && (
                         <td
-                          rowSpan={tSpan}
-                          className={`p-2 border-r border-slate-200 align-top ${
-                            tSpan > 1 ? 'bg-blue-50/40' : 'bg-transparent'
+                          rowSpan={indTSpan}
+                          className={`p-2 border-r border-slate-200 align-top min-w-[200px] ${
+                            indTSpan > 1 ? 'bg-blue-50/20' : 'bg-transparent'
                           }`}
                         >
-                          <textarea
-                            rows={Math.max(2, tSpan * 2)}
-                            value={item.indikatorTujuanRpjmd || ''}
-                            onChange={e => {
-                              if (tSpan > 1) {
-                                handleMergedCellChange('indikatorTujuanRpjmd', tIndices, e.target.value);
-                              } else {
-                                handleCellChange(item.id, 'indikatorTujuanRpjmd', e.target.value);
-                              }
-                            }}
-                            placeholder="Indikator Tujuan..."
-                            className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-blue-500 rounded-md text-xs resize-y focus:outline-hidden transition leading-relaxed text-slate-800"
-                          />
+                          <div className="flex flex-col h-full justify-between gap-1.5">
+                            <div>
+                              <textarea
+                                rows={Math.max(2, indTSpan * 2)}
+                                value={item.indikatorTujuanRpjmd || ''}
+                                onChange={e => {
+                                  if (indTSpan > 1) {
+                                    handleMergedCellChange('indikatorTujuanRpjmd', indTIndices, e.target.value);
+                                  } else {
+                                    handleCellChange(item.id, 'indikatorTujuanRpjmd', e.target.value);
+                                  }
+                                }}
+                                placeholder="Indikator Tujuan..."
+                                className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-blue-500 rounded-md text-xs resize-y focus:outline-hidden transition leading-relaxed text-slate-800"
+                              />
+                              {indTSpan > 1 && (
+                                <div className="text-[10px] text-blue-700 font-medium px-1.5 py-0.5 bg-blue-100/60 rounded inline-flex items-center gap-1 mt-1">
+                                  <Layers className="w-3 h-3 text-blue-600" />
+                                  <span>{indTSpan} Program</span>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Tombol tambah Sasaran baru di bawah Indikator Tujuan ini */}
+                            <div className="pt-1.5 border-t border-slate-200/50 flex items-center justify-between">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleAddSasaranUnderIndikatorTujuan(
+                                    item.tujuanRpjmd || '',
+                                    item.indikatorTujuanRpjmd || '',
+                                    index + indTSpan - 1
+                                  )
+                                }
+                                className="text-[10px] text-sky-700 hover:text-sky-800 font-semibold px-2 py-0.5 bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded flex items-center gap-1 transition shadow-2xs"
+                                title="Tambah baris Sasaran baru di bawah Indikator Tujuan ini (Tujuan &amp; Indikator Tujuan tetap digabung)"
+                              >
+                                <Plus className="w-3 h-3" />
+                                <span>+ Sasaran Baru</span>
+                              </button>
+                            </div>
+                          </div>
                         </td>
                       )}
 
@@ -673,62 +933,103 @@ export const AuditUniverseView: React.FC = () => {
                           }`}
                         >
                           <div className="flex flex-col h-full justify-between gap-1.5">
-                            <textarea
-                              rows={Math.max(2, sSpan * 2)}
-                              value={item.sasaranRpjmd || ''}
-                              onChange={e => {
-                                if (sSpan > 1) {
-                                  handleMergedCellChange('sasaranRpjmd', sIndices, e.target.value);
-                                } else {
-                                  handleCellChange(item.id, 'sasaranRpjmd', e.target.value);
-                                }
-                              }}
-                              placeholder="Uraian Sasaran RPJMD..."
-                              className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-blue-500 rounded-md text-xs font-semibold text-slate-900 resize-y focus:outline-hidden transition leading-relaxed"
-                            />
-                            {sSpan > 1 && (
+                            <div>
+                              <textarea
+                                rows={Math.max(2, sSpan * 2)}
+                                value={item.sasaranRpjmd || ''}
+                                onChange={e => {
+                                  if (sSpan > 1) {
+                                    handleMergedCellChange('sasaranRpjmd', sIndices, e.target.value);
+                                  } else {
+                                    handleCellChange(item.id, 'sasaranRpjmd', e.target.value);
+                                  }
+                                }}
+                                placeholder="Uraian Sasaran RPJMD..."
+                                className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-blue-500 rounded-md text-xs font-semibold text-slate-900 resize-y focus:outline-hidden transition leading-relaxed"
+                              />
+                              {sSpan > 1 && (
+                                <div className="text-[10px] text-blue-700 font-medium px-1.5 py-0.5 bg-blue-100/60 rounded inline-flex items-center gap-1 mt-1">
+                                  <Layers className="w-3 h-3 text-blue-600" />
+                                  <span>{sSpan} Program</span>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Tombol tambah Indikator Sasaran baru di bawah sasaran ini */}
+                            <div className="pt-1.5 border-t border-blue-200/50 flex flex-wrap items-center gap-1">
                               <button
+                                type="button"
                                 onClick={() =>
-                                  handleAddProgramUnderSasaran(
+                                  handleAddIndikatorUnderSasaran(
                                     item.tujuanRpjmd || '',
                                     item.sasaranRpjmd || '',
-                                    item.indikatorSasaranRpjmd || '',
                                     item.indikatorTujuanRpjmd || '',
                                     index + sSpan - 1
                                   )
                                 }
-                                className="text-[10px] text-blue-700 hover:text-blue-800 font-semibold px-2 py-1 bg-blue-100 hover:bg-blue-200 rounded self-start flex items-center gap-1 transition"
-                                title="Tambah baris program baru dalam sasaran ini"
+                                className="text-[10px] text-indigo-700 hover:text-indigo-800 font-semibold px-2 py-1 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded self-start flex items-center gap-1 transition shadow-2xs"
+                                title="Tambah baris Indikator Sasaran baru di bawah sasaran ini (Tujuan &amp; Sasaran tetap digabung)"
                               >
                                 <Plus className="w-3 h-3" />
-                                <span>Tambah Program</span>
+                                <span>+ Indikator Baru</span>
                               </button>
-                            )}
+                            </div>
                           </div>
                         </td>
                       )}
 
-                      {/* RPJMD: Indikator Sasaran (Merged if identical) */}
-                      {showSasaran && (
+                      {/* RPJMD: Indikator Sasaran (Merged if identical within Sasaran) */}
+                      {showIndikator && (
                         <td
-                          rowSpan={sSpan}
-                          className={`p-2 border-r border-slate-200 align-top ${
-                            sSpan > 1 ? 'bg-sky-50/40' : 'bg-transparent'
+                          rowSpan={indSpan}
+                          className={`p-2 border-r border-slate-200 align-top min-w-[240px] ${
+                            indSpan > 1 ? 'bg-indigo-50/40' : 'bg-transparent'
                           }`}
                         >
-                          <textarea
-                            rows={Math.max(2, sSpan * 2)}
-                            value={item.indikatorSasaranRpjmd || ''}
-                            onChange={e => {
-                              if (sSpan > 1) {
-                                handleMergedCellChange('indikatorSasaranRpjmd', sIndices, e.target.value);
-                              } else {
-                                handleCellChange(item.id, 'indikatorSasaranRpjmd', e.target.value);
-                              }
-                            }}
-                            placeholder="Indikator Sasaran..."
-                            className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-blue-500 rounded-md text-xs resize-y focus:outline-hidden transition leading-relaxed text-slate-800"
-                          />
+                          <div className="flex flex-col h-full justify-between gap-1.5">
+                            <div>
+                              <textarea
+                                rows={Math.max(2, indSpan * 2)}
+                                value={item.indikatorSasaranRpjmd || ''}
+                                onChange={e => {
+                                  if (indSpan > 1) {
+                                    handleMergedCellChange('indikatorSasaranRpjmd', indIndices, e.target.value);
+                                  } else {
+                                    handleCellChange(item.id, 'indikatorSasaranRpjmd', e.target.value);
+                                  }
+                                }}
+                                placeholder="Uraian Indikator Sasaran..."
+                                className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-blue-500 rounded-md text-xs resize-y focus:outline-hidden transition leading-relaxed text-slate-800"
+                              />
+                              {indSpan > 1 && (
+                                <div className="text-[10px] text-indigo-700 font-medium px-1.5 py-0.5 bg-indigo-100/60 rounded inline-flex items-center gap-1 mt-1">
+                                  <Layers className="w-3 h-3 text-indigo-600" />
+                                  <span>{indSpan} Program</span>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Tombol tambah program baru di bawah indikator sasaran ini */}
+                            <div className="pt-1.5 border-t border-slate-200/50 flex items-center justify-between">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleAddProgramUnderIndikator(
+                                    item.tujuanRpjmd || '',
+                                    item.sasaranRpjmd || '',
+                                    item.indikatorSasaranRpjmd || '',
+                                    item.indikatorTujuanRpjmd || '',
+                                    index + indSpan - 1
+                                  )
+                                }
+                                className="text-[10px] text-blue-700 hover:text-blue-800 font-semibold px-2 py-0.5 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded flex items-center gap-1 transition shadow-2xs"
+                                title="Tambah baris program baru di bawah indikator ini"
+                              >
+                                <Plus className="w-3 h-3" />
+                                <span>+ Program</span>
+                              </button>
+                            </div>
+                          </div>
                         </td>
                       )}
 
@@ -891,7 +1192,7 @@ export const AuditUniverseView: React.FC = () => {
                         <div className="flex items-center justify-center gap-1">
                           <button
                             onClick={() =>
-                              handleAddProgramUnderSasaran(
+                              handleAddProgramUnderIndikator(
                                 item.tujuanRpjmd || '',
                                 item.sasaranRpjmd || '',
                                 item.indikatorSasaranRpjmd || '',
@@ -900,7 +1201,7 @@ export const AuditUniverseView: React.FC = () => {
                               )
                             }
                             className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition"
-                            title="Tambah baris program di bawah ini (Tujuan & Sasaran sama)"
+                            title="Tambah baris program di bawah ini (Tujuan, Sasaran, dan Indikator sama)"
                           >
                             <Plus className="w-3.5 h-3.5" />
                           </button>
