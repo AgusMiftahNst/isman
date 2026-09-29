@@ -1590,7 +1590,7 @@ export default function App() {
     user.role === 'Administrator'
   );
 
-  if (user && !selectedRiskType && user.role !== 'Administrator') {
+  if (user && !selectedRiskType) {
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 bg-[radial-gradient(circle_at_top_right,_var(--tw-gradient-stops))] from-blue-900/20 via-slate-900 to-slate-900">
         <motion.div 
@@ -1698,6 +1698,77 @@ export default function App() {
           </button>
         </div>
 
+        {/* Module Switcher in Sidebar */}
+        {isSidebarOpen ? (
+          <div className="px-4 pb-3">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[10px] font-black uppercase text-slate-500 tracking-wider">
+                Modul Aktif
+              </span>
+              {selectedRiskType === 'ppbr' && (
+                <span className="px-1.5 py-0.5 bg-teal-500/20 text-teal-400 border border-teal-500/30 rounded text-[9px] font-bold">
+                  APIP
+                </span>
+              )}
+            </div>
+            <div className="grid grid-cols-3 gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
+              <button
+                type="button"
+                onClick={() => { setSelectedRiskType('strategis'); setActiveMenu(0); }}
+                className={`py-1.5 px-1 rounded-lg text-[10px] font-black tracking-tight text-center transition-all ${
+                  selectedRiskType === 'strategis' || (!selectedRiskType && user?.role === 'Administrator')
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                }`}
+                title="Risiko Strategis Organisasi (RSO)"
+              >
+                RSO
+              </button>
+              <button
+                type="button"
+                onClick={() => { setSelectedRiskType('operasional'); setActiveMenu(0); }}
+                className={`py-1.5 px-1 rounded-lg text-[10px] font-black tracking-tight text-center transition-all ${
+                  selectedRiskType === 'operasional'
+                    ? 'bg-emerald-600 text-white shadow-sm'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                }`}
+                title="Risiko Operasional OPD (ROO)"
+              >
+                ROO
+              </button>
+              {isInspektoratUser && (
+                <button
+                  type="button"
+                  onClick={() => { setSelectedRiskType('ppbr'); setActiveMenu(1); }}
+                  className={`py-1.5 px-1 rounded-lg text-[10px] font-black tracking-tight text-center transition-all ${
+                    selectedRiskType === 'ppbr'
+                      ? 'bg-teal-600 text-white shadow-sm'
+                      : 'text-teal-400 hover:text-teal-200 hover:bg-teal-950/60'
+                  }`}
+                  title="Pengawasan Berbasis Risiko (PPBR 14 Lampiran)"
+                >
+                  PPBR
+                </button>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="px-2 pb-3 flex flex-col gap-1 items-center">
+            {isInspektoratUser && (
+              <button
+                type="button"
+                onClick={() => { setSelectedRiskType(selectedRiskType === 'ppbr' ? 'strategis' : 'ppbr'); setActiveMenu(selectedRiskType === 'ppbr' ? 0 : 1); }}
+                className={`p-1.5 rounded-lg text-[9px] font-black transition-all ${
+                  selectedRiskType === 'ppbr' ? 'bg-teal-600 text-white' : 'text-teal-400 hover:bg-slate-800'
+                }`}
+                title="Buka PPBR"
+              >
+                PPBR
+              </button>
+            )}
+          </div>
+        )}
+
         <nav className="flex-1 overflow-y-auto px-4 py-2 space-y-1">
           {menuItems.map((item) => {
             const isNonProgressMenu = item.id === 9;
@@ -1775,18 +1846,16 @@ export default function App() {
               {menuItems.find(m => m.id === activeMenu)?.title}
               {selectedRiskType && (
                 <div className="flex items-center gap-2">
-                  <span className={selectedRiskType === 'ppbr' ? 'text-teal-600 font-extrabold' : 'text-blue-600'}>
+                  <span className={selectedRiskType === 'ppbr' ? 'text-teal-600 font-extrabold' : selectedRiskType === 'operasional' ? 'text-emerald-600 font-extrabold' : 'text-blue-600 font-extrabold'}>
                     ({selectedRiskType === 'operasional' ? 'OPERASIONAL' : selectedRiskType === 'ppbr' ? 'PPBR - PENGAWASAN BERBASIS RISIKO' : 'STRATEGIS'})
                   </span>
-                  {user.role !== 'Administrator' && (
-                    <button 
-                      onClick={() => setSelectedRiskType(null)}
-                      className="p-1 hover:bg-slate-100 text-slate-400 hover:text-slate-700 rounded-lg transition-all"
-                      title="Ganti Kategori / Modul Risiko"
-                    >
-                      <RotateCw size={14} />
-                    </button>
-                  )}
+                  <button 
+                    onClick={() => setSelectedRiskType(null)}
+                    className="p-1 hover:bg-slate-100 text-slate-400 hover:text-slate-700 rounded-lg transition-all"
+                    title="Ganti Kategori / Modul Risiko"
+                  >
+                    <RotateCw size={14} />
+                  </button>
                 </div>
               )}
             </h2>
@@ -1878,6 +1947,7 @@ service cloud.firestore {
                       setActiveMenu(num);
                     }}
                     onBackToRiskSelection={() => setSelectedRiskType(null)}
+                    isAdmin={user?.role === 'Administrator' || user?.username?.toLowerCase() === 'admin'}
                   />
                 )
               ) : activeMenu === 0 ? (
