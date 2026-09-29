@@ -216,6 +216,7 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
           isRemoteUpdateRef.current = true;
           setData(snapData.items);
           localStorage.setItem('ppbr_area_mandatory', JSON.stringify(snapData.items));
+          window.dispatchEvent(new Event('ppbr_data_updated'));
           if (snapData.items.length > 0) {
             localStorage.setItem('ppbr_area_mandatory_local_backup', JSON.stringify(snapData.items));
             setLocalBackupData(snapData.items);
@@ -261,6 +262,7 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
   const handleSaveData = (newData: AreaMandatoryItem[], immediateCloud = false) => {
     setData(newData);
     localStorage.setItem('ppbr_area_mandatory', JSON.stringify(newData));
+    window.dispatchEvent(new Event('ppbr_data_updated'));
     if (newData.length > 0) {
       localStorage.setItem('ppbr_area_mandatory_local_backup', JSON.stringify(newData));
       setLocalBackupData(newData);
