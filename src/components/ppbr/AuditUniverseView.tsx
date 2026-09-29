@@ -1,7 +1,9 @@
-import React, { useState, useMemo } from 'react';
-import { AuditUniverseItem, INITIAL_AUDIT_UNIVERSE } from './ppbrData';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { AuditUniverseItem } from './ppbrData';
 import { exportToExcel, exportToPdf } from './ppbrExport';
 import { ConfirmModal } from '../common/ConfirmModal';
+import { db } from '../../lib/firebase';
+import { doc, onSnapshot, setDoc, getDoc } from 'firebase/firestore';
 import {
   Search,
   Plus,
@@ -13,7 +15,16 @@ import {
   CheckCircle2,
   Layers,
   GitMerge,
-  Split
+  Split,
+  Settings,
+  Building2,
+  X,
+  Check,
+  Cloud,
+  RefreshCw,
+  AlertCircle,
+  Upload,
+  Download
 } from 'lucide-react';
 
 const DEFAULT_INDIKATOR_TUJUAN: Record<string, string> = {
@@ -24,15 +35,18 @@ const DEFAULT_INDIKATOR_TUJUAN: Record<string, string> = {
   'Meningkatkan Ketenteraman, Ketertiban Umum, Penanganan Kemiskinan dan Kesejahteraan Sosial': 'Tingkat Kemiskinan & Indeks Ketenteraman dan Ketertiban'
 };
 
+const DEFAULT_IRBAN_LIST = ['Irban I', 'Irban II', 'Irban III', 'Irban IV', 'Irbansus'];
+
 export const AuditUniverseView: React.FC = () => {
   const [data, setData] = useState<AuditUniverseItem[]>(() => {
     const saved = localStorage.getItem('ppbr_audit_universe');
-    if (saved) {
+    if (saved !== null) {
       try {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
+        if (Array.isArray(parsed)) {
           return parsed.map((item: any) => ({
             ...item,
+            irbanPengampu: item.irbanPengampu === 'Irban Khusus' ? 'Irbansus' : (item.irbanPengampu || 'Irban I'),
             indikatorSasaranRpjmd: item.indikatorSasaranRpjmd || '',
             indikatorTujuanRpjmd: item.indikatorTujuanRpjmd || DEFAULT_INDIKATOR_TUJUAN[item.tujuanRpjmd] || ''
           }));
@@ -41,12 +55,263 @@ export const AuditUniverseView: React.FC = () => {
         console.error('Failed to parse ppbr_audit_universe', e);
       }
     }
-    return INITIAL_AUDIT_UNIVERSE;
+    return [];
   });
 
   const [searchTerm, setSearchTerm] = useState('');
   const [filterIrban, setFilterIrban] = useState('ALL');
   const [mergeViewMode, setMergeViewMode] = useState<boolean>(true);
+
+  // Cloud Real-time Synchronization State
+  const [cloudStatus, setCloudStatus] = useState<'synced' | 'saving' | 'offline' | 'error'>('synced');
+  const [lastSyncedTime, setLastSyncedTime] = useState<string | null>(null);
+  const [isManualSyncing, setIsManualSyncing] = useState<boolean>(false);
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isRemoteUpdateRef = useRef<boolean>(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Safely preserve any existing local data on laptop before cloud can overwrite it
+  const [localBackupData, setLocalBackupData] = useState<AuditUniverseItem[] | null>(() => {
+    try {
+      const saved = localStorage.getItem('ppbr_audit_universe');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          if (!localStorage.getItem('ppbr_audit_universe_local_backup')) {
+            localStorage.setItem('ppbr_audit_universe_local_backup', saved);
+          }
+          return parsed;
+        }
+      }
+      const existingBackup = localStorage.getItem('ppbr_audit_universe_local_backup');
+      if (existingBackup) {
+        const parsed = JSON.parse(existingBackup);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (_) {}
+    return null;
+  });
+
+  const [showLocalRestoreBanner, setShowLocalRestoreBanner] = useState<boolean>(() => {
+    return localBackupData !== null && localBackupData.length > 0;
+  });
+
+  // Irban List state with local persistence & Firestore sync (Single Source of Truth)
+  const [irbanList, setIrbanList] = useState<string[]>(() => {
+    const saved = localStorage.getItem('ppbr_irban_list');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      } catch (e) {
+        console.error('Failed to parse ppbr_irban_list', e);
+      }
+    }
+    return DEFAULT_IRBAN_LIST;
+  });
+
+  // Real-time listener: Listen to Firestore Cloud Database updates
+  useEffect(() => {
+    // 1. Subscribe to Audit Universe in Firestore
+    const auDocRef = doc(db, 'ppbr_data', 'audit_universe');
+    const unsubAU = onSnapshot(auDocRef, (snap) => {
+      if (snap.exists()) {
+        const snapData = snap.data();
+        if (snapData && Array.isArray(snapData.items)) {
+          isRemoteUpdateRef.current = true;
+          const mapped = snapData.items.map((item: any) => ({
+            ...item,
+            irbanPengampu: item.irbanPengampu === 'Irban Khusus' ? 'Irbansus' : (item.irbanPengampu || 'Irban I'),
+            indikatorSasaranRpjmd: item.indikatorSasaranRpjmd || '',
+            indikatorTujuanRpjmd: item.indikatorTujuanRpjmd || DEFAULT_INDIKATOR_TUJUAN[item.tujuanRpjmd] || ''
+          }));
+          setData(mapped);
+          localStorage.setItem('ppbr_audit_universe', JSON.stringify(mapped));
+          setCloudStatus('synced');
+          if (snapData.updatedAt) {
+            try {
+              setLastSyncedTime(new Date(snapData.updatedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+            } catch (_) {
+              setLastSyncedTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+            }
+          }
+          setTimeout(() => {
+            isRemoteUpdateRef.current = false;
+          }, 300);
+        }
+      } else {
+        // If not in Firestore yet, automatically push current data so all users see it
+        setDoc(auDocRef, {
+          items: data,
+          updatedAt: new Date().toISOString(),
+          title: 'Audit Universe Master'
+        }, { merge: true }).catch(err => {
+          console.warn('Initial push to cloud error:', err);
+        });
+      }
+    }, (err) => {
+      console.warn('Firestore Audit Universe listener warning:', err?.message || err);
+      setCloudStatus('offline');
+    });
+
+    // 2. Subscribe to Irban List in Firestore
+    const irbanDocRef = doc(db, 'ppbr_data', 'irban_list');
+    const unsubIrban = onSnapshot(irbanDocRef, (snap) => {
+      if (snap.exists()) {
+        const listData = snap.data()?.list;
+        if (Array.isArray(listData) && listData.length > 0) {
+          setIrbanList(listData);
+          localStorage.setItem('ppbr_irban_list', JSON.stringify(listData));
+        }
+      } else {
+        setDoc(irbanDocRef, {
+          list: irbanList,
+          updatedAt: new Date().toISOString()
+        }, { merge: true }).catch(err => {
+          console.warn('Initial irban push error:', err);
+        });
+      }
+    }, (err) => {
+      console.warn('Firestore Irban listener warning:', err?.message || err);
+    });
+
+    return () => {
+      unsubAU();
+      unsubIrban();
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const handleSaveIrbanList = (newList: string[]) => {
+    setIrbanList(newList);
+    localStorage.setItem('ppbr_irban_list', JSON.stringify(newList));
+    // Sync to Firestore
+    setDoc(doc(db, 'ppbr_data', 'irban_list'), {
+      list: newList,
+      updatedAt: new Date().toISOString()
+    }, { merge: true }).catch(e => {
+      console.warn('Failed to sync irban list to cloud:', e);
+    });
+  };
+
+  // Active Irbans from irbanList (single source of truth - no ghost items from old rows)
+  const allIrbanOptions = useMemo(() => {
+    return irbanList.length > 0 ? irbanList : ['Irban I'];
+  }, [irbanList]);
+
+  // Modal state for adding a new Irban
+  const [addIrbanModal, setAddIrbanModal] = useState<{
+    isOpen: boolean;
+    nameInput: string;
+    source: 'filter' | 'row' | 'manage';
+    targetRowId?: string;
+  }>({
+    isOpen: false,
+    nameInput: '',
+    source: 'filter'
+  });
+
+  // Modal state for managing Irban list
+  const [isManageIrbanOpen, setIsManageIrbanOpen] = useState(false);
+  const [manageNewIrbanInput, setManageNewIrbanInput] = useState('');
+
+  const openAddIrban = (source: 'filter' | 'row' | 'manage', targetRowId?: string) => {
+    setAddIrbanModal({
+      isOpen: true,
+      nameInput: '',
+      source,
+      targetRowId
+    });
+  };
+
+  const handleConfirmAddIrban = () => {
+    const trimmed = addIrbanModal.nameInput.trim();
+    if (!trimmed) return;
+
+    if (!irbanList.includes(trimmed)) {
+      const updatedList = [...irbanList, trimmed];
+      handleSaveIrbanList(updatedList);
+    }
+
+    if (addIrbanModal.source === 'filter') {
+      setFilterIrban(trimmed);
+    } else if (addIrbanModal.source === 'row' && addIrbanModal.targetRowId) {
+      handleCellChange(addIrbanModal.targetRowId, 'irbanPengampu', trimmed);
+    }
+
+    setAddIrbanModal(prev => ({ ...prev, isOpen: false, nameInput: '' }));
+  };
+
+  const handleQuickAddIrbanInManage = () => {
+    const trimmed = manageNewIrbanInput.trim();
+    if (!trimmed) return;
+    if (!irbanList.includes(trimmed)) {
+      handleSaveIrbanList([...irbanList, trimmed]);
+    }
+    setManageNewIrbanInput('');
+  };
+
+  const handleDeleteIrban = (irbanToDelete: string, usageCount: number) => {
+    const updated = irbanList.filter(i => i !== irbanToDelete);
+    const fallbackIrban = updated.length > 0 ? updated[0] : 'Irban I';
+    const finalUpdated = updated.length > 0 ? updated : [fallbackIrban];
+
+    const applyDeletion = () => {
+      // 1. Save new list locally and to Cloud
+      handleSaveIrbanList(finalUpdated);
+
+      // 2. Re-assign any row using this deleted Irban to the fallback Irban so no ghost references remain
+      if (usageCount > 0) {
+        const updatedData = data.map(item => {
+          if (
+            item.irbanPengampu === irbanToDelete ||
+            (irbanToDelete === 'Irbansus' && item.irbanPengampu === 'Irban Khusus')
+          ) {
+            return { ...item, irbanPengampu: fallbackIrban };
+          }
+          return item;
+        });
+        handleSaveData(updatedData, true);
+      }
+
+      // 3. Reset filter if the deleted Irban was currently selected
+      if (filterIrban === irbanToDelete) {
+        setFilterIrban('ALL');
+      }
+    };
+
+    if (usageCount > 0) {
+      setConfirmModal({
+        isOpen: true,
+        title: `Hapus ${irbanToDelete}?`,
+        message: `Irban ini saat ini digunakan pada ${usageCount} baris di Audit Universe. Menghapus Irban ini akan mengalihkan ${usageCount} baris tersebut ke "${fallbackIrban}" dan menghapusnya dari seluruh pilihan dropdown.`,
+        confirmText: `Ya, Hapus & Alihkan ke ${fallbackIrban}`,
+        variant: 'warning',
+        onConfirm: applyDeletion
+      });
+    } else {
+      applyDeletion();
+    }
+  };
+
+  const handleResetIrbanToDefault = () => {
+    setConfirmModal({
+      isOpen: true,
+      title: 'Reset Daftar Irban ke Standar?',
+      message: 'Daftar pilihan Irban akan dikembalikan ke standar awal (Irban I, Irban II, Irban III, Irban IV, Irbansus).',
+      confirmText: 'Ya, Kembalikan ke Standar',
+      variant: 'info',
+      onConfirm: () => {
+        handleSaveIrbanList(DEFAULT_IRBAN_LIST);
+      }
+    });
+  };
+
+  const defaultNewRowIrban = filterIrban !== 'ALL' ? filterIrban : (allIrbanOptions[0] || 'Irban I');
 
   // Confirm Modal state
   const [confirmModal, setConfirmModal] = useState<{
@@ -64,9 +329,151 @@ export const AuditUniverseView: React.FC = () => {
     onConfirm: () => {}
   });
 
-  const handleSaveData = (newData: AuditUniverseItem[]) => {
+  // Dual Persistence: Save to local state + localStorage + Firestore Cloud
+  const handleSaveData = (newData: AuditUniverseItem[], immediateCloud = false) => {
     setData(newData);
     localStorage.setItem('ppbr_audit_universe', JSON.stringify(newData));
+
+    // If update originated from remote snapshot, do not re-emit to cloud
+    if (isRemoteUpdateRef.current) return;
+
+    setCloudStatus('saving');
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+
+    const doCloudSave = async () => {
+      try {
+        const nowIso = new Date().toISOString();
+        await setDoc(doc(db, 'ppbr_data', 'audit_universe'), {
+          items: newData,
+          updatedAt: nowIso
+        }, { merge: true });
+        setCloudStatus('synced');
+        setLastSyncedTime(new Date(nowIso).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+      } catch (err: any) {
+        console.warn('Cloud save deferred or offline:', err);
+        setCloudStatus('offline');
+      }
+    };
+
+    if (immediateCloud) {
+      doCloudSave();
+    } else {
+      saveTimeoutRef.current = setTimeout(doCloudSave, 600);
+    }
+  };
+
+  // Manual Trigger: Pull latest data or Push current data to Firestore
+  const handleManualSync = async () => {
+    setIsManualSyncing(true);
+    setCloudStatus('saving');
+    try {
+      const snap = await getDoc(doc(db, 'ppbr_data', 'audit_universe'));
+      if (snap.exists() && Array.isArray(snap.data()?.items)) {
+        const mapped = snap.data().items.map((item: any) => ({
+          ...item,
+          irbanPengampu: item.irbanPengampu === 'Irban Khusus' ? 'Irbansus' : (item.irbanPengampu || 'Irban I'),
+          indikatorSasaranRpjmd: item.indikatorSasaranRpjmd || '',
+          indikatorTujuanRpjmd: item.indikatorTujuanRpjmd || DEFAULT_INDIKATOR_TUJUAN[item.tujuanRpjmd] || ''
+        }));
+        setData(mapped);
+        localStorage.setItem('ppbr_audit_universe', JSON.stringify(mapped));
+      } else {
+        await setDoc(doc(db, 'ppbr_data', 'audit_universe'), {
+          items: data,
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+      }
+      setCloudStatus('synced');
+      setLastSyncedTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+    } catch (e) {
+      console.warn('Manual sync warning:', e);
+      setCloudStatus('offline');
+    } finally {
+      setIsManualSyncing(false);
+    }
+  };
+
+  // Recovery: Upload local laptop data to Cloud
+  const handleUploadLocalToCloud = () => {
+    if (!localBackupData || localBackupData.length === 0) return;
+    setConfirmModal({
+      isOpen: true,
+      title: 'Unggah Data Laptop Ini ke Cloud?',
+      message: `Terdapat ${localBackupData.length} baris data yang tersimpan di laptop ini. Mengunggahnya akan menjadikan data ini sebagai data utama Cloud server dan langsung terlihat oleh rekan-rekan Anda.`,
+      confirmText: 'Ya, Unggah ke Cloud',
+      variant: 'info',
+      onConfirm: () => {
+        handleSaveData(localBackupData, true);
+        setShowLocalRestoreBanner(false);
+      }
+    });
+  };
+
+  // Export current data or local backup as a JSON file
+  const handleDownloadBackupJson = (itemsToDownload: AuditUniverseItem[], filename = 'audit_universe_backup.json') => {
+    const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(itemsToDownload, null, 2));
+    const downloadAnchor = document.createElement('a');
+    downloadAnchor.setAttribute('href', dataStr);
+    downloadAnchor.setAttribute('download', filename);
+    document.body.appendChild(downloadAnchor);
+    downloadAnchor.click();
+    downloadAnchor.remove();
+  };
+
+  const handleExportJson = () => {
+    handleDownloadBackupJson(data, `audit_universe_backup_${new Date().toISOString().split('T')[0]}.json`);
+  };
+
+  // Import data from a JSON file
+  const handleImportJson = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const parsed = JSON.parse(event.target?.result as string);
+        if (Array.isArray(parsed)) {
+          setConfirmModal({
+            isOpen: true,
+            title: 'Impor Data Audit Universe?',
+            message: `File ini berisi ${parsed.length} baris program. Apakah Anda ingin mengimpor data ini dan menyinkronkannya ke Cloud untuk seluruh tim? Data di tabel saat ini akan digantikan.`,
+            confirmText: 'Ya, Impor & Sinkronkan',
+            variant: 'info',
+            onConfirm: () => {
+              const mapped = parsed.map((item: any, idx: number) => ({
+                id: item.id || `au-${Date.now()}-${idx}`,
+                no: idx + 1,
+                tujuanRpjmd: item.tujuanRpjmd || '',
+                indikatorTujuanRpjmd: item.indikatorTujuanRpjmd || '',
+                sasaranRpjmd: item.sasaranRpjmd || '',
+                indikatorSasaranRpjmd: item.indikatorSasaranRpjmd || '',
+                programRpjmd: item.programRpjmd || '',
+                indikatorProgramRpjmd: item.indikatorProgramRpjmd || '',
+                opdPengampu: item.opdPengampu || '',
+                irbanPengampu: item.irbanPengampu === 'Irban Khusus' ? 'Irbansus' : (item.irbanPengampu || 'Irban I'),
+                tujuanSasaranRenstra: item.tujuanSasaranRenstra || '',
+                indikatorRenstra: item.indikatorRenstra || '',
+                programRenstra: item.programRenstra || '',
+                indikatorProgramRenstra: item.indikatorProgramRenstra || '',
+                anggaran: Number(item.anggaran) || 0,
+                prioritasRpjmn: item.prioritasRpjmn || '',
+                sektorUnggulan: item.sektorUnggulan || 'Bukan sektor unggulan daerah',
+                temuanFraudHukum: item.temuanFraudHukum || '',
+                isuTerkini: item.isuTerkini || ''
+              }));
+              handleSaveData(mapped, true);
+              setShowLocalRestoreBanner(false);
+            }
+          });
+        }
+      } catch (err) {
+        console.error('Failed to parse JSON file', err);
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
   };
 
   // Direct cell update
@@ -111,7 +518,7 @@ export const AuditUniverseView: React.FC = () => {
       programRpjmd: '',
       indikatorProgramRpjmd: '',
       opdPengampu: '',
-      irbanPengampu: 'Irban I',
+      irbanPengampu: defaultNewRowIrban,
       tujuanSasaranRenstra: '',
       indikatorRenstra: '',
       programRenstra: '',
@@ -131,6 +538,7 @@ export const AuditUniverseView: React.FC = () => {
     tujuan: string,
     afterIndex: number
   ) => {
+    const targetItem = filteredData[afterIndex];
     const newRow: AuditUniverseItem = {
       id: `au-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       no: data.length + 1,
@@ -141,7 +549,7 @@ export const AuditUniverseView: React.FC = () => {
       programRpjmd: '',
       indikatorProgramRpjmd: '',
       opdPengampu: '',
-      irbanPengampu: 'Irban I',
+      irbanPengampu: targetItem?.irbanPengampu || defaultNewRowIrban,
       tujuanSasaranRenstra: '',
       indikatorRenstra: '',
       programRenstra: '',
@@ -152,8 +560,6 @@ export const AuditUniverseView: React.FC = () => {
       temuanFraudHukum: '',
       isuTerkini: ''
     };
-
-    const targetItem = filteredData[afterIndex];
     const originalIndex = data.findIndex(d => d.id === targetItem?.id);
     const updated = [...data];
     if (originalIndex !== -1) {
@@ -171,6 +577,7 @@ export const AuditUniverseView: React.FC = () => {
     indTujuan: string,
     afterIndex: number
   ) => {
+    const targetItem = filteredData[afterIndex];
     const newRow: AuditUniverseItem = {
       id: `au-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       no: data.length + 1,
@@ -181,7 +588,7 @@ export const AuditUniverseView: React.FC = () => {
       programRpjmd: '',
       indikatorProgramRpjmd: '',
       opdPengampu: '',
-      irbanPengampu: 'Irban I',
+      irbanPengampu: targetItem?.irbanPengampu || defaultNewRowIrban,
       tujuanSasaranRenstra: '',
       indikatorRenstra: '',
       programRenstra: '',
@@ -192,8 +599,6 @@ export const AuditUniverseView: React.FC = () => {
       temuanFraudHukum: '',
       isuTerkini: ''
     };
-
-    const targetItem = filteredData[afterIndex];
     const originalIndex = data.findIndex(d => d.id === targetItem?.id);
     const updated = [...data];
     if (originalIndex !== -1) {
@@ -212,6 +617,7 @@ export const AuditUniverseView: React.FC = () => {
     indTujuan: string,
     afterIndex: number
   ) => {
+    const targetItem = filteredData[afterIndex];
     const newRow: AuditUniverseItem = {
       id: `au-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       no: data.length + 1,
@@ -222,7 +628,7 @@ export const AuditUniverseView: React.FC = () => {
       programRpjmd: '',
       indikatorProgramRpjmd: '',
       opdPengampu: '',
-      irbanPengampu: 'Irban I',
+      irbanPengampu: targetItem?.irbanPengampu || defaultNewRowIrban,
       tujuanSasaranRenstra: '',
       indikatorRenstra: '',
       programRenstra: '',
@@ -233,8 +639,6 @@ export const AuditUniverseView: React.FC = () => {
       temuanFraudHukum: '',
       isuTerkini: ''
     };
-
-    const targetItem = filteredData[afterIndex];
     const originalIndex = data.findIndex(d => d.id === targetItem?.id);
     const updated = [...data];
     if (originalIndex !== -1) {
@@ -254,6 +658,7 @@ export const AuditUniverseView: React.FC = () => {
     indTujuan: string,
     afterIndex: number
   ) => {
+    const targetItem = filteredData[afterIndex];
     const newRow: AuditUniverseItem = {
       id: `au-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       no: data.length + 1,
@@ -264,7 +669,7 @@ export const AuditUniverseView: React.FC = () => {
       programRpjmd: '',
       indikatorProgramRpjmd: '',
       opdPengampu: '',
-      irbanPengampu: 'Irban I',
+      irbanPengampu: targetItem?.irbanPengampu || defaultNewRowIrban,
       tujuanSasaranRenstra: '',
       indikatorRenstra: '',
       programRenstra: '',
@@ -275,8 +680,6 @@ export const AuditUniverseView: React.FC = () => {
       temuanFraudHukum: '',
       isuTerkini: ''
     };
-
-    const targetItem = filteredData[afterIndex];
     const originalIndex = data.findIndex(d => d.id === targetItem?.id);
     const updated = [...data];
     if (originalIndex !== -1) {
@@ -303,7 +706,7 @@ export const AuditUniverseView: React.FC = () => {
         programRpjmd: '',
         indikatorProgramRpjmd: '',
         opdPengampu: '',
-        irbanPengampu: 'Irban I',
+        irbanPengampu: defaultNewRowIrban,
         tujuanSasaranRenstra: '',
         indikatorRenstra: '',
         programRenstra: '',
@@ -359,7 +762,7 @@ export const AuditUniverseView: React.FC = () => {
       confirmText: 'Ya, Kosongkan Semua',
       variant: 'danger',
       onConfirm: () => {
-        handleSaveData([]);
+        handleSaveData([], true);
       }
     });
   };
@@ -374,7 +777,8 @@ export const AuditUniverseView: React.FC = () => {
         (item.opdPengampu || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
         (item.programRenstra || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
         (item.irbanPengampu || '').toLowerCase().includes(searchTerm.toLowerCase());
-      const matchIrban = filterIrban === 'ALL' || item.irbanPengampu === filterIrban;
+      const rowIrban = item.irbanPengampu === 'Irban Khusus' ? 'Irbansus' : (item.irbanPengampu || '');
+      const matchIrban = filterIrban === 'ALL' || item.irbanPengampu === filterIrban || rowIrban === filterIrban;
       return matchSearch && matchIrban;
     });
   }, [data, searchTerm, filterIrban]);
@@ -626,10 +1030,44 @@ export const AuditUniverseView: React.FC = () => {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-emerald-950/60 border border-emerald-500/30 rounded-xl text-[11px] text-emerald-300 font-medium">
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Tersimpan otomatis</span>
+            {/* Live Cloud Sync Status Badge */}
+            <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
+              cloudStatus === 'synced'
+                ? 'bg-emerald-950/70 border-emerald-500/40 text-emerald-300'
+                : cloudStatus === 'saving'
+                ? 'bg-amber-950/70 border-amber-500/40 text-amber-300 animate-pulse'
+                : 'bg-rose-950/70 border-rose-500/40 text-rose-300'
+            }`}>
+              {cloudStatus === 'synced' ? (
+                <>
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <Cloud className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Cloud Terhubung {lastSyncedTime ? `(${lastSyncedTime})` : ''}</span>
+                </>
+              ) : cloudStatus === 'saving' ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 text-amber-400 animate-spin" />
+                  <span>Menyimpan ke Cloud...</span>
+                </>
+              ) : (
+                <>
+                  <AlertCircle className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Tersimpan Lokal (Offline)</span>
+                </>
+              )}
             </div>
+
+            {/* Manual Sync / Refresh Button */}
+            <button
+              onClick={handleManualSync}
+              disabled={isManualSyncing}
+              className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition disabled:opacity-50"
+              title="Sinkronkan & tarik perubahan terbaru dari Cloud Firestore"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-blue-400 ${isManualSyncing ? 'animate-spin' : ''}`} />
+              <span>{isManualSyncing ? 'Sinkronisasi...' : 'Sinkronkan'}</span>
+            </button>
+
             <button
               onClick={() => setMergeViewMode(!mergeViewMode)}
               className={`px-3 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition border ${
@@ -660,8 +1098,65 @@ export const AuditUniverseView: React.FC = () => {
         </div>
       </div>
 
+      {/* Detected Local Data Alert Banner (For recovering data typed on this laptop) */}
+      {showLocalRestoreBanner && localBackupData && localBackupData.length > 0 && (
+        <div className="bg-amber-500/10 border-2 border-amber-500/40 rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-sm bg-gradient-to-r from-amber-50 to-orange-50 text-slate-800">
+          <div className="flex items-start gap-3">
+            <div className="p-2 bg-amber-500 text-white rounded-xl shadow-xs shrink-0 mt-0.5">
+              <Upload className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h4 className="font-bold text-sm text-amber-950">
+                  Terdeteksi Data Input di Laptop Ini ({localBackupData.length} Baris Program)
+                </h4>
+                <span className="px-2 py-0.5 bg-amber-200 text-amber-900 rounded-full text-[10px] font-bold uppercase tracking-wider">
+                  Tersimpan di Browser
+                </span>
+              </div>
+              <p className="text-xs text-amber-900/90 mt-1 max-w-2xl leading-relaxed">
+                Browser di laptop ini menyimpan data yang pernah diinput. Klik <strong>"Unggah ke Cloud"</strong> agar data ini tersimpan permanen di server Cloud dan otomatis dapat dilihat serta diedit bersama oleh seluruh rekan tim.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 self-end md:self-center shrink-0">
+            <button
+              onClick={handleUploadLocalToCloud}
+              className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-xl flex items-center gap-1.5 shadow-sm transition"
+            >
+              <Upload className="w-4 h-4" />
+              <span>Unggah ke Cloud</span>
+            </button>
+            <button
+              onClick={() => handleDownloadBackupJson(localBackupData, 'data_audit_universe_laptop.json')}
+              className="px-3 py-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 font-semibold text-xs rounded-xl flex items-center gap-1.5 shadow-xs transition"
+              title="Unduh file cadangan JSON dari data laptop ini"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Unduh File JSON</span>
+            </button>
+            <button
+              onClick={() => setShowLocalRestoreBanner(false)}
+              className="p-2 text-slate-400 hover:text-slate-600 rounded-lg transition"
+              title="Tutup banner"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Control Bar: Search, Add Row, Reset */}
       <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
+        {/* Hidden File Input for JSON Import */}
+        <input
+          type="file"
+          ref={fileInputRef}
+          onChange={handleImportJson}
+          accept=".json"
+          className="hidden"
+        />
+
         <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
           <div className="relative flex-1 sm:w-64">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -674,20 +1169,41 @@ export const AuditUniverseView: React.FC = () => {
             />
           </div>
 
-          <select
-            value={filterIrban}
-            onChange={e => setFilterIrban(e.target.value)}
-            className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium text-slate-700 focus:outline-hidden focus:ring-2 focus:ring-blue-500"
-          >
-            <option value="ALL">Semua Irban</option>
-            <option value="Irban I">Irban I</option>
-            <option value="Irban II">Irban II</option>
-            <option value="Irban III">Irban III</option>
-            <option value="Irban Khusus">Irban Khusus</option>
-          </select>
+          <div className="flex items-center gap-1.5">
+            <select
+              value={filterIrban}
+              onChange={e => {
+                if (e.target.value === '__ADD_NEW__') {
+                  openAddIrban('filter');
+                } else {
+                  setFilterIrban(e.target.value);
+                }
+              }}
+              className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 focus:outline-hidden focus:ring-2 focus:ring-blue-500 cursor-pointer transition shadow-xs"
+            >
+              <option value="ALL">Semua Irban</option>
+              {allIrbanOptions.map(irban => (
+                <option key={irban} value={irban}>
+                  {irban}
+                </option>
+              ))}
+              <option value="__ADD_NEW__" className="text-blue-600 font-bold bg-blue-50">
+                + Tambahkan Irban...
+              </option>
+            </select>
+            <button
+              type="button"
+              onClick={() => setIsManageIrbanOpen(true)}
+              className="px-2.5 py-2 bg-slate-50 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 text-slate-600 hover:text-indigo-600 rounded-lg text-xs font-medium flex items-center gap-1.5 transition shadow-xs"
+              title="Kelola & Tambah Irban"
+            >
+              <Settings className="w-3.5 h-3.5" />
+              <span className="hidden md:inline">Kelola Irban</span>
+            </button>
+          </div>
         </div>
 
-        <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end">
           <button
             onClick={handleAddRow}
             className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-xs transition"
@@ -702,11 +1218,27 @@ export const AuditUniverseView: React.FC = () => {
             + 5 Baris
           </button>
           <button
+            onClick={() => fileInputRef.current?.click()}
+            className="px-2.5 py-2 text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 rounded-lg text-xs font-medium flex items-center gap-1.5 transition"
+            title="Impor data dari file JSON cadangan"
+          >
+            <Upload className="w-3.5 h-3.5 text-indigo-500" />
+            <span className="hidden sm:inline">Impor JSON</span>
+          </button>
+          <button
+            onClick={handleExportJson}
+            className="px-2.5 py-2 text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 rounded-lg text-xs font-medium flex items-center gap-1.5 transition"
+            title="Unduh cadangan data ke file JSON"
+          >
+            <Download className="w-3.5 h-3.5 text-indigo-500" />
+            <span className="hidden sm:inline">Ekspor JSON</span>
+          </button>
+          <button
             onClick={requestResetData}
-            className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
+            className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 border border-slate-200 rounded-lg transition"
             title="Kosongkan Tabel"
           >
-            <RotateCcw className="w-4 h-4" />
+            <Trash2 className="w-4 h-4" />
           </button>
         </div>
       </div>
@@ -1069,14 +1601,24 @@ export const AuditUniverseView: React.FC = () => {
                       {/* RENSTRA: Irban Pengampu */}
                       <td className="p-1.5 text-center border-r border-slate-200">
                         <select
-                          value={item.irbanPengampu || 'Irban I'}
-                          onChange={e => handleCellChange(item.id, 'irbanPengampu', e.target.value)}
-                          className="w-full p-1.5 bg-indigo-50/60 hover:bg-white focus:bg-white border border-indigo-200 rounded-md text-xs font-semibold text-indigo-900 focus:outline-hidden focus:ring-1 focus:ring-indigo-500 transition"
+                          value={allIrbanOptions.includes(item.irbanPengampu) ? item.irbanPengampu : (allIrbanOptions[0] || 'Irban I')}
+                          onChange={e => {
+                            if (e.target.value === '__ADD_NEW__') {
+                              openAddIrban('row', item.id);
+                            } else {
+                              handleCellChange(item.id, 'irbanPengampu', e.target.value);
+                            }
+                          }}
+                          className="w-full p-1.5 bg-indigo-50/60 hover:bg-white focus:bg-white border border-indigo-200 rounded-md text-xs font-semibold text-indigo-900 focus:outline-hidden focus:ring-1 focus:ring-indigo-500 transition cursor-pointer"
                         >
-                          <option value="Irban I">Irban I</option>
-                          <option value="Irban II">Irban II</option>
-                          <option value="Irban III">Irban III</option>
-                          <option value="Irban Khusus">Irban Khusus</option>
+                          {allIrbanOptions.map(irban => (
+                            <option key={irban} value={irban}>
+                              {irban}
+                            </option>
+                          ))}
+                          <option value="__ADD_NEW__" className="text-blue-600 font-bold bg-blue-50">
+                            + Tambahkan Irban...
+                          </option>
                         </select>
                       </td>
 
@@ -1279,6 +1821,241 @@ export const AuditUniverseView: React.FC = () => {
         confirmText={confirmModal.confirmText}
         variant={confirmModal.variant}
       />
+
+      {/* Modal Tambah Irban Baru */}
+      {addIrbanModal.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
+          <div
+            className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 scale-in-95 duration-150 transform transition-all"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-3 rounded-xl bg-indigo-100 text-indigo-600 border border-indigo-200 shrink-0">
+                  <Building2 className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-base leading-tight">
+                    Tambah Irban Baru
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-1">
+                    {addIrbanModal.source === 'row'
+                      ? 'Tambahkan Irban baru dan terapkan ke baris ini'
+                      : 'Tambahkan nama Inspektur Pembantu ke daftar sistem'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAddIrbanModal(prev => ({ ...prev, isOpen: false }))}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  Nama Irban / Inspektur Pembantu:
+                </label>
+                <input
+                  type="text"
+                  autoFocus
+                  placeholder="Contoh: Irban IV, Irbansus, Irban V, Irban Investigasi..."
+                  value={addIrbanModal.nameInput}
+                  onChange={e => setAddIrbanModal(prev => ({ ...prev, nameInput: e.target.value }))}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleConfirmAddIrban();
+                    }
+                  }}
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium text-slate-900 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition"
+                />
+              </div>
+
+              {/* Quick suggestions pills */}
+              <div className="space-y-1.5">
+                <span className="text-[11px] font-medium text-slate-500">Pilihan cepat:</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {['Irban IV', 'Irbansus', 'Irban V', 'Irban Investigasi', 'Irban Wilayah IV'].map(sug => {
+                    const isAlreadyIn = allIrbanOptions.includes(sug);
+                    return (
+                      <button
+                        key={sug}
+                        type="button"
+                        onClick={() => {
+                          setAddIrbanModal(prev => ({ ...prev, nameInput: sug }));
+                        }}
+                        className={`text-xs px-2.5 py-1 rounded-lg border transition ${
+                          addIrbanModal.nameInput === sug
+                            ? 'bg-indigo-600 text-white border-indigo-600 font-semibold'
+                            : isAlreadyIn
+                            ? 'bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200'
+                            : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100 font-medium'
+                        }`}
+                      >
+                        {isAlreadyIn ? `✓ ${sug}` : `+ ${sug}`}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setAddIrbanModal(prev => ({ ...prev, isOpen: false }))}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmAddIrban}
+                disabled={!addIrbanModal.nameInput.trim()}
+                className="px-4 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed rounded-xl shadow-xs transition flex items-center gap-1.5"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Simpan & Terapkan</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Kelola Daftar Irban */}
+      {isManageIrbanOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
+          <div
+            className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-4 scale-in-95 duration-150 transform transition-all max-h-[90vh] flex flex-col"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="p-3 rounded-xl bg-indigo-100 text-indigo-600 border border-indigo-200 shrink-0">
+                  <Building2 className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-base leading-tight">
+                    Kelola Daftar Irban (Inspektur Pembantu)
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Atur nama Irban yang tersedia di dropdown penyusunan Audit Universe
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsManageIrbanOpen(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Quick Add within manage */}
+            <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2 shrink-0">
+              <label className="block text-xs font-bold text-slate-700">
+                Tambah Irban Baru
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="Contoh: Irban IV, Irbansus, Irban V..."
+                  value={manageNewIrbanInput}
+                  onChange={e => setManageNewIrbanInput(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleQuickAddIrbanInManage();
+                    }
+                  }}
+                  className="flex-1 px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs font-medium text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                />
+                <button
+                  type="button"
+                  onClick={handleQuickAddIrbanInManage}
+                  disabled={!manageNewIrbanInput.trim()}
+                  className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Tambah</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Irban List */}
+            <div className="flex-1 overflow-y-auto space-y-2 pr-1 min-h-[160px] max-h-[300px]">
+              <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider px-1">
+                Daftar Irban Terdaftar ({allIrbanOptions.length})
+              </div>
+              <div className="space-y-1.5">
+                {allIrbanOptions.map(irban => {
+                  const usageCount = data.filter(
+                    d => d.irbanPengampu === irban || (irban === 'Irbansus' && d.irbanPengampu === 'Irban Khusus')
+                  ).length;
+                  const isDefault = ['Irban I', 'Irban II', 'Irban III', 'Irban IV', 'Irbansus'].includes(irban);
+
+                  return (
+                    <div
+                      key={irban}
+                      className="flex items-center justify-between p-2.5 bg-slate-50 hover:bg-indigo-50/50 border border-slate-200 rounded-xl transition"
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <span className="w-2.5 h-2.5 rounded-full bg-indigo-500"></span>
+                        <span className="font-bold text-xs text-slate-800">{irban}</span>
+                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-200 text-slate-700 font-medium">
+                          {usageCount} baris
+                        </span>
+                        {isDefault && (
+                          <span className="text-[10px] text-slate-400 font-medium">
+                            (Bawaan)
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteIrban(irban, usageCount)}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                          title={`Hapus ${irban}`}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-between pt-3 border-t border-slate-100 shrink-0">
+              <button
+                type="button"
+                onClick={handleResetIrbanToDefault}
+                className="text-xs text-slate-500 hover:text-indigo-600 font-medium flex items-center gap-1 transition"
+                title="Kembalikan daftar Irban ke standar awal"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Reset ke Standar</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setIsManageIrbanOpen(false)}
+                className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition"
+              >
+                Selesai
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
