@@ -8,6 +8,8 @@ import {
   PrioritasProgramRPJMDItem,
   PrioritasUnitKerjaOPDItem,
   UsulanPrioritasPengawasanItem,
+  AreaMandatoryItem,
+  AreaTidakMasukPKPTItem,
   FormatPKPTItem
 } from './ppbrData';
 
@@ -412,4 +414,285 @@ export const sortAndRankMenu9 = (items: PrioritasUnitKerjaOPDItem[]): PrioritasU
       ranking: idx + 1,
       no: idx + 1,
     }));
+};
+
+// 13. Ambil data Menu 11 (Usulan Prioritas Pengawasan PBBR)
+export const getMenu11Items = (): UsulanPrioritasPengawasanItem[] => {
+  const saved = localStorage.getItem('ppbr_usulan_pengawasan');
+  if (saved) {
+    try {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) return parsed;
+    } catch (e) {
+      console.error('Error reading ppbr_usulan_pengawasan', e);
+    }
+  }
+  return [];
+};
+
+// 14. Ambil data Menu 12 (Area Pengawasan Mandatory)
+export const getMenu12Items = (): AreaMandatoryItem[] => {
+  const saved = localStorage.getItem('ppbr_area_mandatory');
+  if (saved) {
+    try {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) return parsed;
+    } catch (e) {
+      console.error('Error reading ppbr_area_mandatory', e);
+    }
+  }
+  return [];
+};
+
+// 15. Ambil data Menu 13 (Area Tidak Masuk PKPT)
+export const getMenu13Items = (): AreaTidakMasukPKPTItem[] => {
+  const saved = localStorage.getItem('ppbr_tidak_masuk_pkpt');
+  if (saved) {
+    try {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) return parsed;
+    } catch (e) {
+      console.error('Error reading ppbr_tidak_masuk_pkpt', e);
+    }
+  }
+  return [];
+};
+
+// Helper: Pembersih string untuk pencocokan toleran
+export const cleanTextForComparison = (str: string): string => {
+  if (!str) return '';
+  return str
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
+// 16. Pemeriksaan apakah suatu area pengawasan tercatat di Menu 13 (Tidak Masuk PKPT)
+export interface ExclusionCheckResult {
+  isExcluded: boolean;
+  matchedReason?: string;
+  matchedItem?: AreaTidakMasukPKPTItem;
+}
+
+export const checkIsExcludedByMenu13 = (
+  targetArea: string,
+  targetOpd: string = '',
+  menu13List: AreaTidakMasukPKPTItem[]
+): ExclusionCheckResult => {
+  if (!targetArea || !menu13List || menu13List.length === 0) {
+    return { isExcluded: false };
+  }
+
+  const cleanArea = cleanTextForComparison(targetArea);
+  const cleanOpd = cleanTextForComparison(targetOpd);
+
+  for (const item13 of menu13List) {
+    const area13 = item13.areaPengawasan || item13.namaOpdProgram || '';
+    const cleanArea13 = cleanTextForComparison(area13);
+    const cleanOpd13 = cleanTextForComparison(item13.opdPengampu || '');
+
+    if (!cleanArea13) continue;
+
+    // A. Kecocokan persis string yang dibersihkan
+    if (cleanArea === cleanArea13) {
+      return {
+        isExcluded: true,
+        matchedReason: item13.alasanTidakMasuk || 'Tercatat di Menu 13 sebagai area yang tidak masuk PKPT',
+        matchedItem: item13
+      };
+    }
+
+    // B. Substring match jika panjang string memadai (>= 6 karakter)
+    if (cleanArea.length >= 6 && cleanArea13.length >= 6) {
+      if (cleanArea.includes(cleanArea13) || cleanArea13.includes(cleanArea)) {
+        return {
+          isExcluded: true,
+          matchedReason: item13.alasanTidakMasuk || 'Tercatat di Menu 13 sebagai area yang tidak masuk PKPT',
+          matchedItem: item13
+        };
+      }
+    }
+
+    // C. Jika OPD sama persis atau saling mengandung, dan ada irisan kata penting (>= 2 kata)
+    if (cleanOpd && cleanOpd13 && (cleanOpd === cleanOpd13 || cleanOpd.includes(cleanOpd13) || cleanOpd13.includes(cleanOpd))) {
+      const words1 = cleanArea.split(' ').filter(w => w.length > 3);
+      const words2 = cleanArea13.split(' ').filter(w => w.length > 3);
+      const common = words1.filter(w => words2.includes(w));
+      if (common.length >= 2 || (words1.length === 1 && common.length === 1)) {
+        return {
+          isExcluded: true,
+          matchedReason: item13.alasanTidakMasuk || 'Tercatat di Menu 13 sebagai area yang tidak masuk PKPT',
+          matchedItem: item13
+        };
+      }
+    }
+  }
+
+  return { isExcluded: false };
+};
+
+// Estimasi OPD untuk item regulasi / mandatory jika belum diatur
+export const getMandatoryDefaultOPD = (areaName: string): string => {
+  const lower = (areaName || '').toLowerCase();
+  if (lower.includes('lkpd') || lower.includes('keuangan')) return 'BPKAD / Seluruh Perangkat Daerah';
+  if (lower.includes('lppd') || lower.includes('penyelenggaraan pemerintahan')) return 'Bagian Tata Pemerintahan Setda / Seluruh OPD';
+  if (lower.includes('rka') || lower.includes('apbd')) return 'TAPD, Bappeda & BPKAD';
+  if (lower.includes('spip')) return 'Seluruh Perangkat Daerah (OPD)';
+  if (lower.includes('pmrb') || lower.includes('reformasi birokrasi')) return 'Bagian Organisasi Setda / Seluruh OPD';
+  if (lower.includes('tlhp') || lower.includes('tindak lanjut')) return 'Seluruh Perangkat Daerah (Entitas Terperiksa)';
+  if (lower.includes('penyerapan') || lower.includes('pbj') || lower.includes('pengadaan')) return 'UKPBJ / Seluruh Pengguna Anggaran';
+  if (lower.includes('dak') || lower.includes('alokasi khusus')) return 'OPD Pengelola DAK (Dinkes, Disdik, DPUPR)';
+  if (lower.includes('desa') || lower.includes('dana desa')) return 'Dinas Pemberdayaan Masyarakat dan Desa (DPMD)';
+  if (lower.includes('bos') || lower.includes('sekolah')) return 'Dinas Pendidikan & Satuan Pendidikan';
+  return 'Pemerintah Daerah / OPD Terkait';
+};
+
+// 17. Penjadwalan & Kompilasi Akhir PKPT (Menu 14)
+export interface GeneratedPKPTResult {
+  items: FormatPKPTItem[];
+  excludedItems: {
+    source: 'Menu 11' | 'Menu 12';
+    areaPengawasan: string;
+    opdPengampu: string;
+    alasan: string;
+  }[];
+  totalMenu11: number;
+  totalMenu12: number;
+  totalExcluded: number;
+}
+
+export const generatePKPTFromSources = (
+  m11List: UsulanPrioritasPengawasanItem[],
+  m12List: AreaMandatoryItem[],
+  m13List: AreaTidakMasukPKPTItem[],
+  existingCustomMap: Map<string, { jadwal?: string; auditor?: number; mandays?: number; anggaran?: number }>
+): GeneratedPKPTResult => {
+  const JADWAL_LIST = [
+    'Januari - Maret (TW I)',
+    'April - Juni (TW II)',
+    'Juli - September (TW III)',
+    'Oktober - Desember (TW IV)'
+  ];
+
+  const excludedItems: {
+    source: 'Menu 11' | 'Menu 12';
+    areaPengawasan: string;
+    opdPengampu: string;
+    alasan: string;
+  }[] = [];
+
+  const validItems: FormatPKPTItem[] = [];
+
+  // BAGIAN A: Ditarik dari Usulan Prioritas PBBR (Menu 11)
+  m11List.forEach((m11, idx) => {
+    const areaName = m11.areaPengawasan || m11.namaAreaPengawasan || '';
+    const opd = m11.opdPengampu || '-';
+
+    const check = checkIsExcludedByMenu13(areaName, opd, m13List);
+    if (check.isExcluded) {
+      excludedItems.push({
+        source: 'Menu 11',
+        areaPengawasan: areaName,
+        opdPengampu: opd,
+        alasan: check.matchedReason || 'Tercatat di Menu 13'
+      });
+      return; // Skip: tidak dimasukkan ke Menu 14
+    }
+
+    const namaKegiatan = `${m11.jenisPengawasan || 'Audit Kinerja Berbasis Risiko'} atas ${areaName}`;
+    const customKey = (`A. KEGIATAN PENGAWASAN PRIORITAS RISIKO (PBBR)::` + areaName).toLowerCase();
+    const fallbackKey = (opd + '::' + namaKegiatan).toLowerCase();
+    const existing = existingCustomMap.get(customKey) || existingCustomMap.get(fallbackKey);
+
+    const defaultJadwal = existing?.jadwal || JADWAL_LIST[idx % JADWAL_LIST.length];
+    const defaultAuditor = existing?.auditor || (Number(m11.skorRisiko) >= 4.5 ? 5 : Number(m11.skorRisiko) >= 3.5 ? 4 : 3);
+    const defaultMandays = existing?.mandays || Number(m11.alokasiMandays) || 15;
+    const defaultAnggaran = existing?.anggaran || defaultMandays * 2500000;
+
+    validItems.push({
+      id: `pkpt-m11-${m11.id || idx}`,
+      no: 0, // Akan dinomori ulang berurutan
+      kategoriKegiatan: 'A. KEGIATAN PENGAWASAN PRIORITAS RISIKO (PBBR)',
+      namaKegiatan,
+      sasaranOPD: opd,
+      jadwalBulan: defaultJadwal,
+      timJumlahAuditor: defaultAuditor,
+      alokasiMandays: defaultMandays,
+      anggaranBiaya: defaultAnggaran
+    });
+  });
+
+  // BAGIAN B: Ditarik dari Pengawasan Mandatory Regulasi (Menu 12)
+  m12List.forEach((m12, idx) => {
+    const areaName = m12.areaPengawasan || m12.namaAreaPengawasan || '';
+    const opd = (m12 as any).opdPengampu || (m12 as any).sasaranOPD || getMandatoryDefaultOPD(areaName);
+
+    const check = checkIsExcludedByMenu13(areaName, opd, m13List);
+    if (check.isExcluded) {
+      excludedItems.push({
+        source: 'Menu 12',
+        areaPengawasan: areaName,
+        opdPengampu: opd,
+        alasan: check.matchedReason || 'Tercatat di Menu 13'
+      });
+      return; // Skip: tidak dimasukkan ke Menu 14
+    }
+
+    const jenis = m12.jenisPengawasan || 'Reviu';
+    // Cegah duplikasi penamaan seperti "Reviu Reviu Laporan Keuangan"
+    const namaKegiatan = areaName.toLowerCase().startsWith(jenis.toLowerCase())
+      ? areaName
+      : `${jenis} atas ${areaName}`;
+
+    const customKey = (`B. KEGIATAN PENGAWASAN MANDATORY (REGULASI)::` + areaName).toLowerCase();
+    const fallbackKey = (opd + '::' + namaKegiatan).toLowerCase();
+    const existing = existingCustomMap.get(customKey) || existingCustomMap.get(fallbackKey);
+
+    // Penjadwalan default cerdas sesuai regulasi umum
+    let smartJadwal = JADWAL_LIST[idx % JADWAL_LIST.length];
+    const lowerArea = areaName.toLowerCase();
+    if (lowerArea.includes('lkpd') || lowerArea.includes('lppd')) {
+      smartJadwal = 'Januari - Maret (TW I)';
+    } else if (lowerArea.includes('rka') || lowerArea.includes('apbd')) {
+      smartJadwal = 'Juli - September (TW III)';
+    } else if (lowerArea.includes('spip') || lowerArea.includes('dak')) {
+      smartJadwal = 'April - Juni (TW II)';
+    } else if (lowerArea.includes('tlhp')) {
+      smartJadwal = 'Oktober - Desember (TW IV)';
+    } else if (lowerArea.includes('penyerapan') || lowerArea.includes('pbj')) {
+      smartJadwal = 'Sepanjang Tahun (Insidentil)';
+    }
+
+    const defaultJadwal = existing?.jadwal || smartJadwal;
+    const defaultAuditor = existing?.auditor || 4;
+    const defaultMandays = existing?.mandays || Number(m12.alokasiMandays) || 20;
+    const defaultAnggaran = existing?.anggaran || defaultMandays * 2500000;
+
+    validItems.push({
+      id: `pkpt-m12-${m12.id || idx}`,
+      no: 0, // Akan dinomori ulang berurutan
+      kategoriKegiatan: 'B. KEGIATAN PENGAWASAN MANDATORY (REGULASI)',
+      namaKegiatan,
+      sasaranOPD: opd,
+      jadwalBulan: defaultJadwal,
+      timJumlahAuditor: defaultAuditor,
+      alokasiMandays: defaultMandays,
+      anggaranBiaya: defaultAnggaran
+    });
+  });
+
+  // Penomoran urut 1, 2, 3...
+  const finalItems = validItems.map((item, idx) => ({
+    ...item,
+    no: idx + 1
+  }));
+
+  return {
+    items: finalItems,
+    excludedItems,
+    totalMenu11: m11List.length,
+    totalMenu12: m12List.length,
+    totalExcluded: excludedItems.length
+  };
 };
