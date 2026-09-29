@@ -36,6 +36,7 @@ export interface PPBRMasterContainerProps {
   activeSubMenu?: string;
   onSelectSubMenu?: (menuId: string) => void;
   onBackToRiskSelection?: () => void;
+  isAdmin?: boolean;
 }
 
 export const PPBR_MENUS = [
@@ -58,9 +59,21 @@ export const PPBR_MENUS = [
 export const PPBRMasterContainer: React.FC<PPBRMasterContainerProps> = ({
   activeSubMenu = 'ppbr-1',
   onSelectSubMenu,
-  onBackToRiskSelection
+  onBackToRiskSelection,
+  isAdmin: isAdminProp
 }) => {
   const [internalMenu, setInternalMenu] = useState<string>(activeSubMenu);
+
+  const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
+    try {
+      const saved = localStorage.getItem('isman_user');
+      if (saved) {
+        const u = JSON.parse(saved);
+        return u.role === 'Administrator' || u.username?.toLowerCase() === 'admin';
+      }
+    } catch (_) {}
+    return false;
+  })();
 
   const currentMenuId = onSelectSubMenu ? activeSubMenu : internalMenu;
   const setMenu = (id: string) => {
@@ -74,7 +87,7 @@ export const PPBRMasterContainer: React.FC<PPBRMasterContainerProps> = ({
   const renderContent = () => {
     switch (currentMenuId) {
       case 'ppbr-1':
-        return <AuditUniverseView />;
+        return <AuditUniverseView isAdmin={isAdmin} />;
       case 'ppbr-2':
         return <EvaluasiRegisterRisikoView />;
       case 'ppbr-3':
@@ -96,13 +109,13 @@ export const PPBRMasterContainer: React.FC<PPBRMasterContainerProps> = ({
       case 'ppbr-11':
         return <UsulanPrioritasPengawasanView />;
       case 'ppbr-12':
-        return <AreaPengawasanMandatoryView />;
+        return <AreaPengawasanMandatoryView isAdmin={isAdmin} />;
       case 'ppbr-13':
         return <AreaTidakMasukPKPTView />;
       case 'ppbr-14':
         return <FormatPKPTBerbasisRisikoView />;
       default:
-        return <AuditUniverseView />;
+        return <AuditUniverseView isAdmin={isAdmin} />;
     }
   };
 
