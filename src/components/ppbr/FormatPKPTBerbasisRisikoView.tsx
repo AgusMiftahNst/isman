@@ -6,7 +6,8 @@ import {
   getMenu12Items,
   getMenu13Items,
   generatePKPTFromSources,
-  GeneratedPKPTResult
+  GeneratedPKPTResult,
+  ExistingCustomPKPT
 } from './ppbrSyncHelpers';
 import {
   CalendarCheck,
@@ -80,19 +81,24 @@ export const FormatPKPTBerbasisRisikoView: React.FC = () => {
     const m12List = getMenu12Items();
     const m13List = getMenu13Items();
 
-    // Pertahankan penyesuaian kustom sebelumnya yang pernah diedit user di Menu 14
-    let existingCustom = new Map<string, { jadwal?: string; auditor?: number; mandays?: number; anggaran?: number }>();
+    // Hanya pertahankan penyesuaian kustom yang pernah disimpan/diedit manual oleh user di Menu 14
+    let existingCustom = new Map<string, ExistingCustomPKPT>();
     data.forEach(item => {
-      const key1 = (item.sasaranOPD + '::' + item.namaKegiatan).toLowerCase();
-      const key2 = ((item.kategoriKegiatan || '') + '::' + (item.areaPengawasan || item.namaKegiatan || '')).toLowerCase();
-      const customVal = {
-        jadwal: item.jadwalBulan,
-        auditor: item.timJumlahAuditor,
-        mandays: item.alokasiMandays,
-        anggaran: item.anggaranBiaya
-      };
-      existingCustom.set(key1, customVal);
-      existingCustom.set(key2, customVal);
+      if (item.manuallyEdited) {
+        const key1 = (item.sasaranOPD + '::' + item.namaKegiatan).toLowerCase();
+        const key2 = ((item.kategoriKegiatan || '') + '::' + (item.areaPengawasan || item.namaKegiatan || '')).toLowerCase();
+        const customVal: ExistingCustomPKPT = {
+          jadwal: item.jadwalBulan,
+          auditor: item.timJumlahAuditor,
+          mandays: item.alokasiMandays,
+          anggaran: item.anggaranBiaya,
+          opd: item.sasaranOPD,
+          namaKegiatan: item.namaKegiatan,
+          manuallyEdited: true
+        };
+        existingCustom.set(key1, customVal);
+        existingCustom.set(key2, customVal);
+      }
     });
 
     const result = generatePKPTFromSources(m11List, m12List, m13List, existingCustom);
@@ -105,7 +111,7 @@ export const FormatPKPTBerbasisRisikoView: React.FC = () => {
     setTimeout(() => {
       setIsSyncing(false);
       setToastMessage(
-        `Sinkronisasi selesai! ${result.items.length} kegiatan pengawasan berhasil dimuat (${result.excludedItems.length} objek dikecualikan oleh Menu 13).`
+        `Sinkronisasi selesai! ${result.items.length} kegiatan pengawasan dimuat. Pagu anggaran, rencana jadwal, dan personil tim dikosongkan untuk diisi sesuai penetapan.`
       );
       setTimeout(() => setToastMessage(null), 5000);
     }, 350);
@@ -122,9 +128,13 @@ export const FormatPKPTBerbasisRisikoView: React.FC = () => {
 
     const updatedItem: FormatPKPTItem = {
       ...editingItem,
-      timJumlahAuditor: Number(editingItem.timJumlahAuditor),
-      alokasiMandays: Number(editingItem.alokasiMandays),
-      anggaranBiaya: Number(editingItem.anggaranBiaya)
+      namaKegiatan: editingItem.namaKegiatan?.trim() || '',
+      sasaranOPD: editingItem.sasaranOPD?.trim() || '-',
+      jadwalBulan: editingItem.jadwalBulan?.trim() || '',
+      timJumlahAuditor: Number(editingItem.timJumlahAuditor) || 0,
+      alokasiMandays: Number(editingItem.alokasiMandays) || 0,
+      anggaranBiaya: Number(editingItem.anggaranBiaya) || 0,
+      manuallyEdited: true
     };
 
     const updated = data.map(d => (d.id === updatedItem.id ? updatedItem : d));
@@ -132,6 +142,8 @@ export const FormatPKPTBerbasisRisikoView: React.FC = () => {
     localStorage.setItem('ppbr_pkpt_final', JSON.stringify(updated));
     setShowEditModal(false);
     setEditingItem(null);
+    setToastMessage('Data penugasan PKPT berhasil diperbarui.');
+    setTimeout(() => setToastMessage(null), 3000);
   };
 
   // Filter berdasarkan Tab dan Search Term
@@ -173,12 +185,23 @@ export const FormatPKPTBerbasisRisikoView: React.FC = () => {
       { header: 'Pagu Biaya (Rp)', key: 'anggaranBiaya', width: 22 }
     ];
 
+    const exportData = filteredData.map(d => ({
+      no: d.no,
+      kategoriKegiatan: d.kategoriKegiatan,
+      namaKegiatan: d.namaKegiatan,
+      sasaranOPD: d.sasaranOPD || '-',
+      jadwalBulan: d.jadwalBulan || '-',
+      timJumlahAuditor: d.timJumlahAuditor && d.timJumlahAuditor > 0 ? `${d.timJumlahAuditor} Orang` : '-',
+      alokasiMandays: d.alokasiMandays && d.alokasiMandays > 0 ? `${d.alokasiMandays} Hari` : '-',
+      anggaranBiaya: d.anggaranBiaya && d.anggaranBiaya > 0 ? `Rp ${d.anggaranBiaya.toLocaleString('id-ID')}` : '-'
+    }));
+
     exportToExcel(
       `Lampiran_14_Format_PKPT_Berbasis_Risiko_Tahun_${headerInfo.tahun}`,
       `LAMPIRAN 14: FORMAT PROGRAM KERJA PENGAWASAN TAHUNAN (PKPT) BERBASIS RISIKO TAHUN ${headerInfo.tahun}`,
-      `Total: ${data.length} Penugasan (PBBR Menu 11: ${countPbbr} | Mandatory Menu 12: ${countMandatory} | Dikecualikan Menu 13: ${countExcluded}) | Total Mandays: ${totalMandays} Hari | Total Anggaran: Rp ${totalAnggaran.toLocaleString('id-ID')}`,
+      `Total: ${data.length} Penugasan (PBBR Menu 11: ${countPbbr} | Mandatory Menu 12: ${countMandatory} | Dikecualikan Menu 13: ${countExcluded}) | Total Mandays: ${totalMandays > 0 ? totalMandays + ' Hari' : '-'} | Total Anggaran: ${totalAnggaran > 0 ? 'Rp ' + totalAnggaran.toLocaleString('id-ID') : '-'}`,
       cols,
-      filteredData
+      exportData
     );
   };
 
@@ -188,11 +211,11 @@ export const FormatPKPTBerbasisRisikoView: React.FC = () => {
       d.no,
       d.namaKegiatan,
       d.kategoriKegiatan?.includes('MANDATORY') ? 'Mandatory' : 'Prioritas Risiko',
-      d.sasaranOPD,
-      d.jadwalBulan,
-      `${d.timJumlahAuditor} Org`,
-      `${d.alokasiMandays} Hari`,
-      `Rp ${d.anggaranBiaya.toLocaleString('id-ID')}`
+      d.sasaranOPD || '-',
+      d.jadwalBulan || '-',
+      d.timJumlahAuditor && d.timJumlahAuditor > 0 ? `${d.timJumlahAuditor} Org` : '-',
+      d.alokasiMandays && d.alokasiMandays > 0 ? `${d.alokasiMandays} Hari` : '-',
+      d.anggaranBiaya && d.anggaranBiaya > 0 ? `Rp ${d.anggaranBiaya.toLocaleString('id-ID')}` : '-'
     ]);
 
     exportToPdf(
@@ -305,7 +328,9 @@ export const FormatPKPTBerbasisRisikoView: React.FC = () => {
           </div>
           <div className="bg-slate-900/80 rounded-xl p-3 border border-slate-700/60">
             <span className="text-[11px] text-emerald-300 block font-medium">Pagu Anggaran Total</span>
-            <span className="text-base font-black text-emerald-300 mt-0.5 block">Rp {totalAnggaran.toLocaleString('id-ID')}</span>
+            <span className="text-base font-black text-emerald-300 mt-0.5 block">
+              {totalAnggaran > 0 ? `Rp ${totalAnggaran.toLocaleString('id-ID')}` : '-'}
+            </span>
           </div>
         </div>
       </div>
@@ -514,36 +539,56 @@ export const FormatPKPTBerbasisRisikoView: React.FC = () => {
 
                         {/* Sasaran OPD */}
                         <td className="p-3 text-slate-700 font-medium">
-                          <div className="flex items-center gap-1.5">
-                            <Building2 className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                            <span>{item.sasaranOPD}</span>
-                          </div>
+                          {item.sasaranOPD && item.sasaranOPD !== '-' ? (
+                            <div className="flex items-center gap-1.5">
+                              <Building2 className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                              <span>{item.sasaranOPD}</span>
+                            </div>
+                          ) : (
+                            <span className="text-slate-400 text-[11px]">-</span>
+                          )}
                         </td>
 
                         {/* Jadwal Pelaksanaan */}
                         <td className="p-3 text-center">
-                          <span className="px-2.5 py-1 bg-slate-100 text-slate-800 rounded-lg font-semibold inline-flex items-center gap-1 text-[11px]">
-                            <Calendar className="w-3 h-3 text-indigo-600" />
-                            {item.jadwalBulan}
-                          </span>
+                          {item.jadwalBulan ? (
+                            <span className="px-2.5 py-1 bg-slate-100 text-slate-800 rounded-lg font-semibold inline-flex items-center gap-1 text-[11px]">
+                              <Calendar className="w-3 h-3 text-indigo-600" />
+                              {item.jadwalBulan}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400 italic text-[11px]">-</span>
+                          )}
                         </td>
 
                         {/* Personil Tim */}
                         <td className="p-3 text-center font-semibold text-slate-800">
-                          <span className="inline-flex items-center gap-1">
-                            <Users className="w-3 h-3 text-slate-400" />
-                            {item.timJumlahAuditor} Orang
-                          </span>
+                          {item.timJumlahAuditor && item.timJumlahAuditor > 0 ? (
+                            <span className="inline-flex items-center gap-1">
+                              <Users className="w-3 h-3 text-slate-400" />
+                              {item.timJumlahAuditor} Orang
+                            </span>
+                          ) : (
+                            <span className="text-slate-400 text-[11px]">-</span>
+                          )}
                         </td>
 
                         {/* Mandays */}
                         <td className="p-3 text-center font-bold text-indigo-900">
-                          {item.alokasiMandays} Hari
+                          {item.alokasiMandays && item.alokasiMandays > 0 ? (
+                            `${item.alokasiMandays} Hari`
+                          ) : (
+                            <span className="text-slate-400 font-normal text-[11px]">-</span>
+                          )}
                         </td>
 
                         {/* Anggaran Biaya */}
                         <td className="p-3 text-right font-black text-emerald-800">
-                          Rp {item.anggaranBiaya.toLocaleString('id-ID')}
+                          {item.anggaranBiaya && item.anggaranBiaya > 0 ? (
+                            `Rp ${item.anggaranBiaya.toLocaleString('id-ID')}`
+                          ) : (
+                            <span className="text-slate-400 font-normal text-[11px]">-</span>
+                          )}
                         </td>
 
                         {/* Aksi Edit */}
@@ -566,13 +611,13 @@ export const FormatPKPTBerbasisRisikoView: React.FC = () => {
                       TOTAL DOKUMEN PKPT TAMPIL ({filteredData.length} KEGIATAN):
                     </td>
                     <td className="p-3 text-center text-indigo-900">
-                      {totalAuditorPersonil} Personil-Tugas
+                      {totalAuditorPersonil > 0 ? `${totalAuditorPersonil} Personil-Tugas` : '-'}
                     </td>
                     <td className="p-3 text-center text-indigo-900">
-                      {totalMandays} Mandays
+                      {totalMandays > 0 ? `${totalMandays} Mandays` : '-'}
                     </td>
                     <td className="p-3 text-right text-emerald-800 text-sm">
-                      Rp {totalAnggaran.toLocaleString('id-ID')}
+                      {totalAnggaran > 0 ? `Rp ${totalAnggaran.toLocaleString('id-ID')}` : '-'}
                     </td>
                     <td></td>
                   </tr>
@@ -721,20 +766,50 @@ export const FormatPKPTBerbasisRisikoView: React.FC = () => {
 
             <form onSubmit={handleSaveEdit} className="space-y-3 pt-4">
               <div className="bg-indigo-50/60 p-3 rounded-xl border border-indigo-100 space-y-1">
-                <span className="text-[11px] text-indigo-700 font-bold block">{editingItem.namaKegiatan}</span>
-                <span className="text-xs text-slate-600 block">Sasaran OPD: {editingItem.sasaranOPD}</span>
-                <span className="text-[10px] text-slate-500 block">Kategori: {editingItem.kategoriKegiatan}</span>
+                <span className="text-[10px] text-indigo-700 font-bold uppercase tracking-wider block">
+                  {editingItem.kategoriKegiatan}
+                </span>
+                <span className="text-xs font-semibold text-slate-800 block">
+                  Penugasan #{editingItem.no}
+                </span>
               </div>
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Rencana Jadwal Pelaksanaan *
+                  Nama Kegiatan / Penugasan Pengawasan *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editingItem.namaKegiatan || ''}
+                  onChange={e => setEditingItem({ ...editingItem, namaKegiatan: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-semibold text-slate-800 focus:ring-2 focus:ring-indigo-400 focus:outline-hidden"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Sasaran Unit Kerja / OPD Pengampu
+                </label>
+                <input
+                  type="text"
+                  value={editingItem.sasaranOPD && editingItem.sasaranOPD !== '-' ? editingItem.sasaranOPD : ''}
+                  onChange={e => setEditingItem({ ...editingItem, sasaranOPD: e.target.value })}
+                  placeholder="Contoh: Dinas Kesehatan, BPKAD, dll."
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs text-slate-800 focus:ring-2 focus:ring-indigo-400 focus:outline-hidden"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Rencana Jadwal Pelaksanaan
                 </label>
                 <select
-                  value={editingItem.jadwalBulan}
+                  value={editingItem.jadwalBulan || ''}
                   onChange={e => setEditingItem({ ...editingItem, jadwalBulan: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-semibold"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-indigo-400 focus:outline-hidden"
                 >
+                  <option value="">-- Belum Dijadwalkan --</option>
                   <option value="Januari - Maret (TW I)">Januari - Maret (TW I)</option>
                   <option value="April - Juni (TW II)">April - Juni (TW II)</option>
                   <option value="Juli - September (TW III)">Juli - September (TW III)</option>
@@ -746,47 +821,50 @@ export const FormatPKPTBerbasisRisikoView: React.FC = () => {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Personil Tim (Orang) *
+                    Personil Tim (Orang)
                   </label>
                   <input
                     type="number"
-                    required
-                    min={1}
-                    max={15}
-                    value={editingItem.timJumlahAuditor}
-                    onChange={e => setEditingItem({ ...editingItem, timJumlahAuditor: Number(e.target.value) })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs"
+                    min={0}
+                    max={20}
+                    placeholder="Kosong"
+                    value={editingItem.timJumlahAuditor || ''}
+                    onChange={e => setEditingItem({ ...editingItem, timJumlahAuditor: Number(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-indigo-400 focus:outline-hidden"
                   />
+                  <span className="text-[10px] text-slate-400 mt-0.5 block">Kosongkan jika belum ditetapkan</span>
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Alokasi Mandays (Hari) *
+                    Alokasi Mandays (Hari)
                   </label>
                   <input
                     type="number"
-                    required
-                    min={1}
-                    max={60}
-                    value={editingItem.alokasiMandays}
-                    onChange={e => setEditingItem({ ...editingItem, alokasiMandays: Number(e.target.value) })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-bold"
+                    min={0}
+                    max={120}
+                    placeholder="0"
+                    value={editingItem.alokasiMandays || ''}
+                    onChange={e => setEditingItem({ ...editingItem, alokasiMandays: Number(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-bold focus:ring-2 focus:ring-indigo-400 focus:outline-hidden"
                   />
+                  <span className="text-[10px] text-slate-400 mt-0.5 block">Dari Menu 11/12 atau penyesuaian</span>
                 </div>
               </div>
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Pagu Biaya Pengawasan (Rp) *
+                  Pagu Biaya Pengawasan (Rp)
                 </label>
                 <input
                   type="number"
-                  required
                   min={0}
-                  step={500000}
-                  value={editingItem.anggaranBiaya}
-                  onChange={e => setEditingItem({ ...editingItem, anggaranBiaya: Number(e.target.value) })}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-black text-emerald-800"
+                  step={100000}
+                  placeholder="0"
+                  value={editingItem.anggaranBiaya || ''}
+                  onChange={e => setEditingItem({ ...editingItem, anggaranBiaya: Number(e.target.value) || 0 })}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-black text-emerald-800 focus:ring-2 focus:ring-indigo-400 focus:outline-hidden"
                 />
+                <span className="text-[10px] text-slate-400 mt-0.5 block">Kosongkan jika pagu belum dialokasikan</span>
               </div>
 
               <div className="flex justify-end gap-2 pt-4 border-t border-slate-200">
