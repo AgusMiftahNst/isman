@@ -37,7 +37,22 @@ const DEFAULT_INDIKATOR_TUJUAN: Record<string, string> = {
 
 const DEFAULT_IRBAN_LIST = ['Irban I', 'Irban II', 'Irban III', 'Irban IV', 'Irbansus'];
 
-export const AuditUniverseView: React.FC = () => {
+export interface AuditUniverseViewProps {
+  isAdmin?: boolean;
+}
+
+export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: isAdminProp }) => {
+  const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
+    try {
+      const saved = localStorage.getItem('isman_user');
+      if (saved) {
+        const u = JSON.parse(saved);
+        return u.role === 'Administrator' || u.username?.toLowerCase() === 'admin';
+      }
+    } catch (_) {}
+    return false;
+  })();
+
   const [data, setData] = useState<AuditUniverseItem[]>(() => {
     const saved = localStorage.getItem('ppbr_audit_universe');
     if (saved !== null) {
@@ -1098,8 +1113,8 @@ export const AuditUniverseView: React.FC = () => {
         </div>
       </div>
 
-      {/* Detected Local Data Alert Banner (For recovering data typed on this laptop) */}
-      {showLocalRestoreBanner && localBackupData && localBackupData.length > 0 && (
+      {/* Detected Local Data Alert Banner (For recovering data typed on this laptop - Admin Only) */}
+      {isAdmin && showLocalRestoreBanner && localBackupData && localBackupData.length > 0 && (
         <div className="bg-amber-500/10 border-2 border-amber-500/40 rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-sm bg-gradient-to-r from-amber-50 to-orange-50 text-slate-800">
           <div className="flex items-start gap-3">
             <div className="p-2 bg-amber-500 text-white rounded-xl shadow-xs shrink-0 mt-0.5">
@@ -1217,14 +1232,16 @@ export const AuditUniverseView: React.FC = () => {
           >
             + 5 Baris
           </button>
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="px-2.5 py-2 text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 rounded-lg text-xs font-medium flex items-center gap-1.5 transition"
-            title="Impor data dari file JSON cadangan"
-          >
-            <Upload className="w-3.5 h-3.5 text-indigo-500" />
-            <span className="hidden sm:inline">Impor JSON</span>
-          </button>
+          {isAdmin && (
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="px-2.5 py-2 text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 rounded-lg text-xs font-medium flex items-center gap-1.5 transition"
+              title="Impor data dari file JSON cadangan"
+            >
+              <Upload className="w-3.5 h-3.5 text-indigo-500" />
+              <span className="hidden sm:inline">Impor JSON</span>
+            </button>
+          )}
           <button
             onClick={handleExportJson}
             className="px-2.5 py-2 text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 rounded-lg text-xs font-medium flex items-center gap-1.5 transition"
