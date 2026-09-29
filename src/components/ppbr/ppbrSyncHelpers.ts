@@ -562,19 +562,22 @@ export interface GeneratedPKPTResult {
   totalExcluded: number;
 }
 
+export interface ExistingCustomPKPT {
+  jadwal?: string;
+  auditor?: number;
+  mandays?: number;
+  anggaran?: number;
+  opd?: string;
+  namaKegiatan?: string;
+  manuallyEdited?: boolean;
+}
+
 export const generatePKPTFromSources = (
   m11List: UsulanPrioritasPengawasanItem[],
   m12List: AreaMandatoryItem[],
   m13List: AreaTidakMasukPKPTItem[],
-  existingCustomMap: Map<string, { jadwal?: string; auditor?: number; mandays?: number; anggaran?: number }>
+  existingCustomMap: Map<string, ExistingCustomPKPT>
 ): GeneratedPKPTResult => {
-  const JADWAL_LIST = [
-    'Januari - Maret (TW I)',
-    'April - Juni (TW II)',
-    'Juli - September (TW III)',
-    'Oktober - Desember (TW IV)'
-  ];
-
   const excludedItems: {
     source: 'Menu 11' | 'Menu 12';
     areaPengawasan: string;
@@ -586,8 +589,9 @@ export const generatePKPTFromSources = (
 
   // BAGIAN A: Ditarik dari Usulan Prioritas PBBR (Menu 11)
   m11List.forEach((m11, idx) => {
-    const areaName = m11.areaPengawasan || m11.namaAreaPengawasan || '';
-    const opd = m11.opdPengampu || '-';
+    const areaName = (m11.areaPengawasan || m11.namaAreaPengawasan || '').trim();
+    if (!areaName) return;
+    const opd = (m11.opdPengampu || '').trim() || '-';
 
     const check = checkIsExcludedByMenu13(areaName, opd, m13List);
     if (check.isExcluded) {
@@ -600,33 +604,41 @@ export const generatePKPTFromSources = (
       return; // Skip: tidak dimasukkan ke Menu 14
     }
 
-    const namaKegiatan = `${m11.jenisPengawasan || 'Audit Kinerja Berbasis Risiko'} atas ${areaName}`;
+    const defaultNamaKegiatan = `${m11.jenisPengawasan || 'Audit Kinerja Berbasis Risiko'} atas ${areaName}`;
     const customKey = (`A. KEGIATAN PENGAWASAN PRIORITAS RISIKO (PBBR)::` + areaName).toLowerCase();
-    const fallbackKey = (opd + '::' + namaKegiatan).toLowerCase();
+    const fallbackKey = (opd + '::' + defaultNamaKegiatan).toLowerCase();
     const existing = existingCustomMap.get(customKey) || existingCustomMap.get(fallbackKey);
 
-    const defaultJadwal = existing?.jadwal || JADWAL_LIST[idx % JADWAL_LIST.length];
-    const defaultAuditor = existing?.auditor || (Number(m11.skorRisiko) >= 4.5 ? 5 : Number(m11.skorRisiko) >= 3.5 ? 4 : 3);
-    const defaultMandays = existing?.mandays || Number(m11.alokasiMandays) || 15;
-    const defaultAnggaran = existing?.anggaran || defaultMandays * 2500000;
+    const isEdited = Boolean(existing?.manuallyEdited);
+
+    // Sesuai instruksi: pagu anggaran, rencana jadwal, dan personil tim dikosongkan dulu saat sinkronisasi
+    // Hanya mengisi data yang sudah terisi di menu sebelumnya (Menu 11: area, OPD, jenis, alokasi mandays)
+    const finalJadwal = isEdited ? (existing?.jadwal || '') : '';
+    const finalAuditor = isEdited ? (Number(existing?.auditor) || 0) : 0;
+    const finalMandays = isEdited ? (Number(existing?.mandays) || 0) : (Number(m11.alokasiMandays) || 0);
+    const finalAnggaran = isEdited ? (Number(existing?.anggaran) || 0) : 0;
+    const finalNama = isEdited && existing?.namaKegiatan ? existing.namaKegiatan : defaultNamaKegiatan;
+    const finalOpd = isEdited && existing?.opd ? existing.opd : opd;
 
     validItems.push({
       id: `pkpt-m11-${m11.id || idx}`,
       no: 0, // Akan dinomori ulang berurutan
       kategoriKegiatan: 'A. KEGIATAN PENGAWASAN PRIORITAS RISIKO (PBBR)',
-      namaKegiatan,
-      sasaranOPD: opd,
-      jadwalBulan: defaultJadwal,
-      timJumlahAuditor: defaultAuditor,
-      alokasiMandays: defaultMandays,
-      anggaranBiaya: defaultAnggaran
+      namaKegiatan: finalNama,
+      sasaranOPD: finalOpd,
+      jadwalBulan: finalJadwal,
+      timJumlahAuditor: finalAuditor,
+      alokasiMandays: finalMandays,
+      anggaranBiaya: finalAnggaran,
+      manuallyEdited: isEdited
     });
   });
 
   // BAGIAN B: Ditarik dari Pengawasan Mandatory Regulasi (Menu 12)
   m12List.forEach((m12, idx) => {
-    const areaName = m12.areaPengawasan || m12.namaAreaPengawasan || '';
-    const opd = (m12 as any).opdPengampu || (m12 as any).sasaranOPD || getMandatoryDefaultOPD(areaName);
+    const areaName = (m12.areaPengawasan || m12.namaAreaPengawasan || '').trim();
+    if (!areaName) return;
+    const opd = (m12 as any).opdPengampu || (m12 as any).sasaranOPD || '-';
 
     const check = checkIsExcludedByMenu13(areaName, opd, m13List);
     if (check.isExcluded) {
@@ -639,46 +651,38 @@ export const generatePKPTFromSources = (
       return; // Skip: tidak dimasukkan ke Menu 14
     }
 
-    const jenis = m12.jenisPengawasan || 'Reviu';
+    const jenis = (m12.jenisPengawasan || 'Reviu').trim();
     // Cegah duplikasi penamaan seperti "Reviu Reviu Laporan Keuangan"
-    const namaKegiatan = areaName.toLowerCase().startsWith(jenis.toLowerCase())
+    const defaultNamaKegiatan = areaName.toLowerCase().startsWith(jenis.toLowerCase())
       ? areaName
       : `${jenis} atas ${areaName}`;
 
     const customKey = (`B. KEGIATAN PENGAWASAN MANDATORY (REGULASI)::` + areaName).toLowerCase();
-    const fallbackKey = (opd + '::' + namaKegiatan).toLowerCase();
+    const fallbackKey = (opd + '::' + defaultNamaKegiatan).toLowerCase();
     const existing = existingCustomMap.get(customKey) || existingCustomMap.get(fallbackKey);
 
-    // Penjadwalan default cerdas sesuai regulasi umum
-    let smartJadwal = JADWAL_LIST[idx % JADWAL_LIST.length];
-    const lowerArea = areaName.toLowerCase();
-    if (lowerArea.includes('lkpd') || lowerArea.includes('lppd')) {
-      smartJadwal = 'Januari - Maret (TW I)';
-    } else if (lowerArea.includes('rka') || lowerArea.includes('apbd')) {
-      smartJadwal = 'Juli - September (TW III)';
-    } else if (lowerArea.includes('spip') || lowerArea.includes('dak')) {
-      smartJadwal = 'April - Juni (TW II)';
-    } else if (lowerArea.includes('tlhp')) {
-      smartJadwal = 'Oktober - Desember (TW IV)';
-    } else if (lowerArea.includes('penyerapan') || lowerArea.includes('pbj')) {
-      smartJadwal = 'Sepanjang Tahun (Insidentil)';
-    }
+    const isEdited = Boolean(existing?.manuallyEdited);
 
-    const defaultJadwal = existing?.jadwal || smartJadwal;
-    const defaultAuditor = existing?.auditor || 4;
-    const defaultMandays = existing?.mandays || Number(m12.alokasiMandays) || 20;
-    const defaultAnggaran = existing?.anggaran || defaultMandays * 2500000;
+    // Sesuai instruksi: pagu anggaran, rencana jadwal, dan personil tim dikosongkan dulu saat sinkronisasi
+    // Sasaran OPD jika belum ada di Menu 12 tidak diisi otomatis tanpa dasar
+    const finalJadwal = isEdited ? (existing?.jadwal || '') : '';
+    const finalAuditor = isEdited ? (Number(existing?.auditor) || 0) : 0;
+    const finalMandays = isEdited ? (Number(existing?.mandays) || 0) : (Number(m12.alokasiMandays) || 0);
+    const finalAnggaran = isEdited ? (Number(existing?.anggaran) || 0) : 0;
+    const finalNama = isEdited && existing?.namaKegiatan ? existing.namaKegiatan : defaultNamaKegiatan;
+    const finalOpd = isEdited && existing?.opd ? existing.opd : opd;
 
     validItems.push({
       id: `pkpt-m12-${m12.id || idx}`,
       no: 0, // Akan dinomori ulang berurutan
       kategoriKegiatan: 'B. KEGIATAN PENGAWASAN MANDATORY (REGULASI)',
-      namaKegiatan,
-      sasaranOPD: opd,
-      jadwalBulan: defaultJadwal,
-      timJumlahAuditor: defaultAuditor,
-      alokasiMandays: defaultMandays,
-      anggaranBiaya: defaultAnggaran
+      namaKegiatan: finalNama,
+      sasaranOPD: finalOpd,
+      jadwalBulan: finalJadwal,
+      timJumlahAuditor: finalAuditor,
+      alokasiMandays: finalMandays,
+      anggaranBiaya: finalAnggaran,
+      manuallyEdited: isEdited
     });
   });
 
