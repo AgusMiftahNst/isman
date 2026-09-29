@@ -144,6 +144,7 @@ export const UsulanPrioritasPengawasanView: React.FC = () => {
 
     setData(generatedUsulan);
     localStorage.setItem('ppbr_usulan_pengawasan', JSON.stringify(generatedUsulan));
+    window.dispatchEvent(new Event('ppbr_data_updated'));
   };
 
   // Muat data saat komponen aktif
@@ -156,6 +157,7 @@ export const UsulanPrioritasPengawasanView: React.FC = () => {
     const updated = data.map(d => (d.id === item.id ? { ...d, jenisPengawasan: newJenis } : d));
     setData(updated);
     localStorage.setItem('ppbr_usulan_pengawasan', JSON.stringify(updated));
+    window.dispatchEvent(new Event('ppbr_data_updated'));
   };
 
   // Simpan hasil form edit
@@ -175,6 +177,7 @@ export const UsulanPrioritasPengawasanView: React.FC = () => {
 
     setData(updated);
     localStorage.setItem('ppbr_usulan_pengawasan', JSON.stringify(updated));
+    window.dispatchEvent(new Event('ppbr_data_updated'));
     setShowEditModal(false);
     setEditingItem(null);
   };
