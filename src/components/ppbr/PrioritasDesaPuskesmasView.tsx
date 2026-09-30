@@ -4,7 +4,22 @@ import { exportToExcel, exportToPdf } from './ppbrExport';
 import { ConfirmModal } from '../common/ConfirmModal';
 import { Landmark, Plus, Trash2, Edit3, X, Info, FileSpreadsheet, FileText, Search, Trophy, RotateCcw } from 'lucide-react';
 
-export const PrioritasDesaPuskesmasView: React.FC = () => {
+export interface PrioritasDesaPuskesmasViewProps {
+  isAdmin?: boolean;
+}
+
+export const PrioritasDesaPuskesmasView: React.FC<PrioritasDesaPuskesmasViewProps> = ({ isAdmin: isAdminProp }) => {
+  const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
+    try {
+      const saved = localStorage.getItem('isman_user');
+      if (saved) {
+        const u = JSON.parse(saved);
+        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.role === 'Operator' || u.role === 'Inspektur' || u.username?.toLowerCase() === 'admin' || u.username?.toLowerCase() === 'inspektur';
+      }
+    } catch (_) {}
+    return true;
+  })();
+
   const [data, setData] = useState<PrioritasDesaPuskesmasItem[]>(() => {
     const saved = localStorage.getItem('ppbr_prioritas_desa_puskesmas');
     return saved ? JSON.parse(saved) : INITIAL_PRIORITAS_DESA_PUSKESMAS;
@@ -154,6 +169,29 @@ export const PrioritasDesaPuskesmasView: React.FC = () => {
     });
   };
 
+  const requestResetPenilaian = () => {
+    setConfirmModal({
+      isOpen: true,
+      title: 'Reset Semua Penilaian Desa / Puskesmas / Sekolah?',
+      message: `Apakah Anda yakin ingin mereset seluruh skor penilaian (${data.length} entitas)?`,
+      detail: 'Seluruh skala faktor risiko (Anggaran, Temuan, SDM, Geografis) akan direset ke 0 tanpa menghapus daftar nama entitas, sehingga evaluator dapat menilai ulang secara nyata.',
+      confirmText: 'Ya, Reset Penilaian',
+      variant: 'warning',
+      onConfirm: () => {
+        const resetItems = data.map(item => ({
+          ...item,
+          skalaAnggaran: 0,
+          skalaTemuan: 0,
+          skalaKompetensiSDM: 0,
+          skalaGeografis: 0,
+          skorTotal: 0,
+          ranking: 0
+        }));
+        handleSaveData(resetItems);
+      }
+    });
+  };
+
   const filteredData = data.filter(d => {
     const matchType = tipeFilter === 'all' || d.tipe === tipeFilter;
     const matchSearch = (d.namaEntitas || '').toLowerCase().includes(searchTerm.toLowerCase());
@@ -252,6 +290,16 @@ export const PrioritasDesaPuskesmasView: React.FC = () => {
               <Plus className="w-4 h-4" />
               <span>Tambah Data</span>
             </button>
+            {isAdmin && data.length > 0 && (
+              <button
+                onClick={requestResetPenilaian}
+                className="px-3.5 py-2 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-xs"
+                title="Reset seluruh skor penilaian entitas menjadi 0"
+              >
+                <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
+                <span>Reset Penilaian</span>
+              </button>
+            )}
             {data.length > 0 && (
               <button
                 onClick={requestResetData}
