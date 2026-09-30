@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { UsulanPrioritasPengawasanItem, PrioritasProgramRPJMDItem } from './ppbrData';
 import { exportToExcel, exportToPdf } from './ppbrExport';
+import { ConfirmModal } from '../common/ConfirmModal';
 import {
   Target,
   Edit3,
@@ -12,10 +13,12 @@ import {
   RefreshCw,
   Crown,
   AlertTriangle,
+  AlertCircle,
   Building2,
   CheckCircle2,
   SlidersHorizontal,
-  ArrowUpDown
+  ArrowUpDown,
+  RotateCcw
 } from 'lucide-react';
 
 export const PILIHAN_JENIS_PENGAWASAN = [
@@ -28,7 +31,22 @@ export const PILIHAN_JENIS_PENGAWASAN = [
   'Asistensi & Pendampingan Tata Kelola'
 ];
 
-export const UsulanPrioritasPengawasanView: React.FC = () => {
+export interface UsulanPrioritasPengawasanViewProps {
+  isAdmin?: boolean;
+}
+
+export const UsulanPrioritasPengawasanView: React.FC<UsulanPrioritasPengawasanViewProps> = ({ isAdmin: isAdminProp }) => {
+  const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
+    try {
+      const saved = localStorage.getItem('isman_user');
+      if (saved) {
+        const u = JSON.parse(saved);
+        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.role === 'Operator' || u.role === 'Inspektur' || u.username?.toLowerCase() === 'admin' || u.username?.toLowerCase() === 'inspektur';
+      }
+    } catch (_) {}
+    return true;
+  })();
+
   // Baca data dari Menu 8 (Prioritas Program RPJMD)
   const getMenu8Data = (): PrioritasProgramRPJMDItem[] => {
     const saved = localStorage.getItem('ppbr_prioritas_program');
@@ -47,6 +65,42 @@ export const UsulanPrioritasPengawasanView: React.FC = () => {
   const [data, setData] = useState<UsulanPrioritasPengawasanItem[]>([]);
   const [menu8Items, setMenu8Items] = useState<PrioritasProgramRPJMDItem[]>([]);
   const [isMenu8Filled, setIsMenu8Filled] = useState<boolean>(false);
+
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    detail?: string;
+    confirmText?: string;
+    variant?: 'danger' | 'warning' | 'info';
+    onConfirm: () => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => {}
+  });
+
+  const requestResetPenilaian = () => {
+    setConfirmModal({
+      isOpen: true,
+      title: 'Reset Semua Bentuk Pengawasan & Mandays?',
+      message: `Apakah Anda yakin ingin mereset bentuk/jenis pengawasan dan alokasi mandays (${data.length} usulan program)?`,
+      detail: 'Seluruh bentuk/jenis pengawasan akan diubah menjadi kosong ("Belum Diisi") dan alokasi mandays dikosongkan ke 0 tanpa menghapus program dari Menu 8.',
+      confirmText: 'Ya, Reset Penilaian',
+      variant: 'warning',
+      onConfirm: () => {
+        const resetItems = data.map(item => ({
+          ...item,
+          jenisPengawasan: '',
+          alokasiMandays: 0
+        }));
+        setData(resetItems);
+        localStorage.setItem('ppbr_usulan_pengawasan', JSON.stringify(resetItems));
+        window.dispatchEvent(new Event('ppbr_data_updated'));
+      }
+    });
+  };
 
   const [filterKategori, setFilterKategori] = useState<'all' | 'Tinggi' | 'Sedang' | 'Rendah'>('all');
   const [searchTerm, setSearchTerm] = useState('');
@@ -78,7 +132,7 @@ export const UsulanPrioritasPengawasanView: React.FC = () => {
           const key = (item.areaPengawasan || '').trim().toLowerCase();
           if (key) {
             existingCustom.set(key, {
-              jenis: item.jenisPengawasan || 'Audit Kinerja Berbasis Risiko',
+              jenis: item.jenisPengawasan && item.jenisPengawasan !== 'Belum Diisi' ? item.jenisPengawasan : '',
               mandays: item.alokasiMandays || 15
             });
           }
@@ -89,13 +143,13 @@ export const UsulanPrioritasPengawasanView: React.FC = () => {
     }
 
     // Urutkan dari risiko tertinggi di Menu 8:
-    // Program KDH selalu teratas, lalu diurutkan berdasarkan skorTotal / totalRisiko descending
+    // Program KDH selalu teratas, lalu diurutkan berdasarkan skorTotal descending
     const sortedMenu8 = [...m8List].sort((a, b) => {
       const isKDHa = a.permintaanKDH === 'Ya' || Boolean(a.isKDH);
       const isKDHb = b.permintaanKDH === 'Ya' || Boolean(b.isKDH);
       if (isKDHa && !isKDHb) return -1;
       if (!isKDHa && isKDHb) return 1;
-      return (b.skorTotal || b.totalRisiko || 0) - (a.skorTotal || a.totalRisiko || 0);
+      return (b.skorTotal || 0) - (a.skorTotal || 0);
     });
 
     const generatedUsulan: UsulanPrioritasPengawasanItem[] = sortedMenu8.map((m8, idx) => {
@@ -103,30 +157,22 @@ export const UsulanPrioritasPengawasanView: React.FC = () => {
       const existing = existingCustom.get(key);
 
       const isKDH = m8.permintaanKDH === 'Ya' || Boolean(m8.isKDH);
-      const skor = isKDH ? 5.0 : (m8.skorTotal || m8.totalRisiko || 3.5);
+      const skor = isKDH ? 5.0 : (Number(m8.skorTotal) || 0);
 
-      let kat: 'Tinggi' | 'Sedang' | 'Rendah' = 'Sedang';
+      let kat: 'Tinggi' | 'Sedang' | 'Rendah' | 'Belum Dinilai' = 'Sedang';
       if (isKDH || skor >= 3.75) {
         kat = 'Tinggi';
       } else if (skor >= 2.5) {
         kat = 'Sedang';
-      } else {
+      } else if (skor > 0) {
         kat = 'Rendah';
+      } else {
+        kat = 'Belum Dinilai';
       }
 
-      // Default bentuk pengawasan disesuaikan dengan profil risiko
-      let defaultJenis = existing?.jenis;
-      if (!defaultJenis) {
-        if (isKDH) {
-          defaultJenis = 'Audit Investigatif / Kasus Khusus';
-        } else if (kat === 'Tinggi') {
-          defaultJenis = 'Audit Kinerja Berbasis Risiko';
-        } else if (kat === 'Sedang') {
-          defaultJenis = 'Audit Kepatuhan / Ketaatan';
-        } else {
-          defaultJenis = 'Monitoring & Pemantauan';
-        }
-      }
+      // Sesuai instruksi: Bentuk / Jenis Pengawasan JANGAN diisi otomatis tanpa pilihan user!
+      // Jika belum dipilih, default bernilai kosong / Belum Diisi
+      const defaultJenis = existing?.jenis && existing.jenis !== 'Belum Diisi' ? existing.jenis : '';
 
       const defaultMandays = existing?.mandays ?? (isKDH ? 20 : kat === 'Tinggi' ? 18 : kat === 'Sedang' ? 14 : 10);
 
@@ -193,6 +239,8 @@ export const UsulanPrioritasPengawasanView: React.FC = () => {
 
   const totalMandays = data.reduce((acc, curr) => acc + curr.alokasiMandays, 0);
   const countTinggi = data.filter(d => d.kategoriPrioritas === 'Tinggi').length;
+  const countSelesai = data.filter(d => Boolean(d.jenisPengawasan && d.jenisPengawasan !== 'Belum Diisi' && d.jenisPengawasan.trim() !== '')).length;
+  const countBelumDiisi = data.length - countSelesai;
 
   const handleExportExcel = () => {
     const cols = [
@@ -263,6 +311,16 @@ export const UsulanPrioritasPengawasanView: React.FC = () => {
               <RefreshCw className="w-4 h-4" />
               <span>Sinkronkan Ulang dari Menu 8</span>
             </button>
+            {isAdmin && data.length > 0 && (
+              <button
+                onClick={requestResetPenilaian}
+                className="px-3.5 py-2 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-xs"
+                title="Reset seluruh bentuk pengawasan dan mandays ke Belum Diisi"
+              >
+                <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
+                <span>Reset Penilaian</span>
+              </button>
+            )}
             <button
               onClick={() => setShowGuide(!showGuide)}
               className="px-3.5 py-2 bg-blue-800/60 hover:bg-blue-700/80 text-blue-100 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition border border-blue-700/50"
@@ -292,22 +350,30 @@ export const UsulanPrioritasPengawasanView: React.FC = () => {
         {/* Highlight Summary Widgets */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 pt-5 border-t border-blue-800/40">
           <div className="bg-slate-900/80 rounded-xl p-3 border border-slate-700/60">
-            <span className="text-[11px] text-slate-400 block font-medium">Total Usulan dari Menu 8</span>
+            <span className="text-[11px] text-slate-400 block font-medium">Total Objek dari Menu 8</span>
             <span className="text-xl font-black text-white mt-0.5 block">{data.length} Objek</span>
           </div>
           <div className="bg-slate-900/80 rounded-xl p-3 border border-slate-700/60">
-            <span className="text-[11px] text-rose-300 block font-medium">Prioritas Tinggi (High Risk)</span>
-            <span className="text-xl font-black text-rose-400 mt-0.5 block">{countTinggi} Program</span>
+            <span className="text-[11px] text-emerald-300 block font-medium">Bentuk Pengawasan Selesai</span>
+            <span className="text-xl font-black text-emerald-400 mt-0.5 block">{countSelesai} Selesai</span>
+          </div>
+          <div className="bg-slate-900/80 rounded-xl p-3 border border-slate-700/60">
+            <span className="text-[11px] text-amber-300 block font-medium">Bentuk Pengawasan Belum Diisi</span>
+            <span className="text-xl font-black text-amber-400 mt-0.5 block">{countBelumDiisi} Belum Diisi</span>
           </div>
           <div className="bg-slate-900/80 rounded-xl p-3 border border-slate-700/60">
             <span className="text-[11px] text-blue-300 block font-medium">Total Estimasi Mandays</span>
             <span className="text-xl font-black text-blue-300 mt-0.5 block">{totalMandays} Hari</span>
           </div>
-          <div className="bg-slate-900/80 rounded-xl p-3 border border-slate-700/60">
-            <span className="text-[11px] text-emerald-300 block font-medium">Alur Data Sistem</span>
-            <span className="text-xs text-emerald-200 mt-1 block font-semibold flex items-center gap-1">
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-              Menu 8 &rarr; Menu 11 &rarr; Menu 14
+        </div>
+
+        {/* Info Banner Alur Menu 14 */}
+        <div className="mt-4 p-3 bg-blue-900/60 border border-blue-700/50 rounded-xl text-xs text-blue-100 flex items-start gap-2.5">
+          <Info className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
+          <div>
+            <strong className="text-cyan-200">Koneksi Otomatis ke Menu 14 (Format PKPT):</strong>
+            <span className="block text-blue-200/90 mt-0.5">
+              Kegiatan pengawasan dari Menu 11 ini <strong>hanya akan diteruskan ke Menu 14 jika Bentuk / Jenis Pengawasannya telah diisi</strong> dan skor risiko telah selesai dinilai. Selama masih berstatus <em>Belum Diisi</em>, data tidak akan masuk ke Menu 14 (Menu 14 hanya akan terisi dari Pengawasan Mandatory Regulasi Menu 12).
             </span>
           </div>
         </div>
@@ -534,17 +600,33 @@ export const UsulanPrioritasPengawasanView: React.FC = () => {
 
                         {/* Bentuk / Jenis Pengawasan - DROPDOWN LANGSUNG */}
                         <td className="p-3">
-                          <select
-                            value={item.jenisPengawasan}
-                            onChange={e => handleUpdateJenisPengawasan(item, e.target.value)}
-                            className="w-full px-3 py-1.5 bg-white border border-slate-300 hover:border-blue-400 focus:ring-2 focus:ring-blue-400 rounded-xl text-xs font-semibold text-slate-800 transition"
-                          >
-                            {PILIHAN_JENIS_PENGAWASAN.map(jp => (
-                              <option key={jp} value={jp}>
-                                {jp}
-                              </option>
-                            ))}
-                          </select>
+                          <div className="space-y-1">
+                            {(!item.jenisPengawasan || item.jenisPengawasan === 'Belum Diisi' || item.jenisPengawasan.trim() === '') && (
+                              <div className="flex items-center gap-1">
+                                <span className="px-2 py-0.5 rounded text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-300 inline-flex items-center gap-1">
+                                  <AlertCircle className="w-3 h-3 text-amber-600" />
+                                  Belum Diisi
+                                </span>
+                                <span className="text-[10px] text-amber-700 italic">Pilih jenis pengawasan</span>
+                              </div>
+                            )}
+                            <select
+                              value={item.jenisPengawasan || ''}
+                              onChange={e => handleUpdateJenisPengawasan(item, e.target.value)}
+                              className={`w-full px-3 py-1.5 rounded-xl text-xs font-semibold transition ${
+                                !item.jenisPengawasan || item.jenisPengawasan === 'Belum Diisi' || item.jenisPengawasan.trim() === ''
+                                  ? 'bg-amber-50/80 border border-dashed border-amber-400 text-amber-950 focus:bg-white focus:ring-2 focus:ring-amber-400'
+                                  : 'bg-white border border-slate-300 text-slate-800 hover:border-blue-400 focus:ring-2 focus:ring-blue-400'
+                              }`}
+                            >
+                              <option value="">-- Pilih Bentuk Pengawasan (Belum Diisi) --</option>
+                              {PILIHAN_JENIS_PENGAWASAN.map(jp => (
+                                <option key={jp} value={jp}>
+                                  {jp}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
                         </td>
 
                         {/* Alokasi Mandays */}
@@ -609,10 +691,11 @@ export const UsulanPrioritasPengawasanView: React.FC = () => {
                   Bentuk / Jenis Pengawasan *
                 </label>
                 <select
-                  value={editingItem.jenisPengawasan}
+                  value={editingItem.jenisPengawasan || ''}
                   onChange={e => setEditingItem({ ...editingItem, jenisPengawasan: e.target.value })}
                   className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-semibold"
                 >
+                  <option value="">-- Belum Diisi --</option>
                   {PILIHAN_JENIS_PENGAWASAN.map(jp => (
                     <option key={jp} value={jp}>
                       {jp}
@@ -658,6 +741,18 @@ export const UsulanPrioritasPengawasanView: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Confirmation Modal */}
+      <ConfirmModal
+        isOpen={confirmModal.isOpen}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        detail={confirmModal.detail}
+        confirmText={confirmModal.confirmText}
+        variant={confirmModal.variant}
+        onConfirm={confirmModal.onConfirm}
+        onClose={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+      />
     </div>
   );
 };
