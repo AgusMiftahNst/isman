@@ -32,7 +32,22 @@ import {
   TrendingUp
 } from 'lucide-react';
 
-export const PrioritasUnitKerjaOPDView: React.FC = () => {
+export interface PrioritasUnitKerjaOPDViewProps {
+  isAdmin?: boolean;
+}
+
+export const PrioritasUnitKerjaOPDView: React.FC<PrioritasUnitKerjaOPDViewProps> = ({ isAdmin: isAdminProp }) => {
+  const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
+    try {
+      const saved = localStorage.getItem('isman_user');
+      if (saved) {
+        const u = JSON.parse(saved);
+        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.role === 'Operator' || u.role === 'Inspektur' || u.username?.toLowerCase() === 'admin' || u.username?.toLowerCase() === 'inspektur';
+      }
+    } catch (_) {}
+    return true;
+  })();
+
   const [data, setData] = useState<PrioritasUnitKerjaOPDItem[]>(() => {
     const saved = localStorage.getItem('ppbr_prioritas_opd');
     if (saved) {
@@ -406,6 +421,52 @@ export const PrioritasUnitKerjaOPDView: React.FC = () => {
     });
   };
 
+  const requestResetPenilaian = () => {
+    setConfirmModal({
+      isOpen: true,
+      title: 'Reset Semua Penilaian Prioritas OPD?',
+      message: `Apakah Anda yakin ingin mereset seluruh penilaian untuk ${data.length} unit kerja / OPD?`,
+      detail: 'Seluruh skor dan skala faktor risiko OPD akan direset ke baseline tanpa menghapus daftar nama OPD, sehingga evaluator dapat menilai ulang secara nyata.',
+      confirmText: 'Ya, Reset Penilaian',
+      variant: 'warning',
+      onConfirm: () => {
+        const resetItems = data.map(item => {
+          const calc = calculateSkorMenu9({
+            kematanganMRLevel: 0,
+            skalaRegisterRisiko: 0,
+            skalaAnggaran: 0,
+            skalaProgramUnggulan: 0,
+            skalaTemuanFraud: 0,
+            skalaIsuTerkini: 0,
+            skalaTahunAudit: 1,
+            skalaPengalamanApip: 1,
+            permintaanKDH: 'Tidak',
+            isKDH: false,
+          });
+          return {
+            ...item,
+            kematanganMRLevel: 0,
+            skalaRegisterRisiko: 0,
+            skalaAnggaran: 0,
+            skalaProgramUnggulan: 0,
+            skalaTemuanFraud: 0,
+            skalaIsuTerkini: 0,
+            skalaTahunAudit: 1,
+            skalaPengalamanApip: 1,
+            permintaanKDH: 'Tidak',
+            isKDH: false,
+            rataRataManajemen: calc.rataRataManajemen,
+            skorManajemenLainnya: calc.skorManajemenLainnya,
+            skorTotal: calc.skorTotal,
+            tingkatRisiko: calc.tingkatRisiko,
+            pilihanPengawasan: 'Belum Dinilai'
+          };
+        });
+        handleSaveData(resetItems);
+      }
+    });
+  };
+
   const filteredData = data.filter(d =>
     (d.unitKerja || d.opd || '').toLowerCase().includes(searchTerm.toLowerCase())
   );
@@ -521,6 +582,16 @@ export const PrioritasUnitKerjaOPDView: React.FC = () => {
               <Plus className="w-3.5 h-3.5" />
               <span>Tambah OPD</span>
             </button>
+            {isAdmin && data.length > 0 && (
+              <button
+                onClick={requestResetPenilaian}
+                className="px-3.5 py-2 bg-slate-800 hover:bg-amber-900/60 text-slate-300 hover:text-amber-200 border border-slate-700 rounded-xl text-xs font-medium flex items-center gap-1.5 transition"
+                title="Reset Seluruh Penilaian Prioritas OPD"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Reset Penilaian</span>
+              </button>
+            )}
             {data.length > 0 && (
               <button
                 onClick={requestResetData}
