@@ -92,6 +92,7 @@ const getMenu1ProgramsList = (): Menu1ProgramItem[] => {
 };
 
 const calculateSkalaStatic = (val: number): number => {
+  if (val < 0) return 0;
   if (val === 4) return 5;
   if (val === 3) return 4;
   if (val === 2) return 3;
@@ -99,7 +100,22 @@ const calculateSkalaStatic = (val: number): number => {
   return 1;
 };
 
-export const FaktorRisikoTemuanFraudView: React.FC = () => {
+export interface FaktorRisikoTemuanFraudViewProps {
+  isAdmin?: boolean;
+}
+
+export const FaktorRisikoTemuanFraudView: React.FC<FaktorRisikoTemuanFraudViewProps> = ({ isAdmin: isAdminProp }) => {
+  const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
+    try {
+      const saved = localStorage.getItem('isman_user');
+      if (saved) {
+        const u = JSON.parse(saved);
+        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.role === 'Operator' || u.role === 'Inspektur' || u.username?.toLowerCase() === 'admin' || u.username?.toLowerCase() === 'inspektur';
+      }
+    } catch (_) {}
+    return true;
+  })();
+
   // Inisialisasi data: Jika belum ada di localStorage, otomatis ambil dari Program RPJMD & OPD di Menu 1
   const [data, setData] = useState<FaktorRisikoTemuanFraudItem[]>(() => {
     const saved = localStorage.getItem('ppbr_faktor_temuan_fraud');
@@ -112,28 +128,21 @@ export const FaktorRisikoTemuanFraudView: React.FC = () => {
       }
     }
 
-    // Auto-populate dari Program RPJMD dan OPD Menu 1
+    // Auto-populate dari Program RPJMD dan OPD Menu 1 dengan status awal Belum Diisi (-1)
     const menu1List = getMenu1ProgramsList();
     if (menu1List.length > 0) {
-      return menu1List.map((item, idx) => {
-        const temuanInternal95: 0 | 1 = 1;
-        const temuanEksternal90: 0 | 1 = 1;
-        const potensiFraud: 0 | 1 = 0;
-        const kasusHukum: 0 | 1 = 0;
-        const totalNilai = temuanInternal95 + temuanEksternal90 + potensiFraud + kasusHukum;
-        return {
-          id: `ftf-${idx + 1}-${Date.now()}`,
-          no: idx + 1,
-          program: item.programRpjmd,
-          namaOPD: item.opdPengampu || '',
-          temuanInternal95,
-          temuanEksternal90,
-          potensiFraud,
-          kasusHukum,
-          nilai: totalNilai,
-          skala: calculateSkalaStatic(totalNilai)
-        };
-      });
+      return menu1List.map((item, idx) => ({
+        id: `ftf-${idx + 1}-${Date.now()}`,
+        no: idx + 1,
+        program: item.programRpjmd,
+        namaOPD: item.opdPengampu || '',
+        temuanInternal95: -1,
+        temuanEksternal90: -1,
+        potensiFraud: -1,
+        kasusHukum: -1,
+        nilai: -1,
+        skala: 0
+      }));
     }
 
     return INITIAL_TEMUAN_FRAUD;
@@ -206,10 +215,10 @@ export const FaktorRisikoTemuanFraudView: React.FC = () => {
       setNewItem({
         program: '',
         namaOPD: '',
-        temuanInternal95: 1,
-        temuanEksternal90: 1,
-        potensiFraud: 0,
-        kasusHukum: 0
+        temuanInternal95: -1,
+        temuanEksternal90: -1,
+        potensiFraud: -1,
+        kasusHukum: -1
       });
       return;
     }
@@ -219,10 +228,10 @@ export const FaktorRisikoTemuanFraudView: React.FC = () => {
       setNewItem({
         program: found.programRpjmd,
         namaOPD: found.opdPengampu || '',
-        temuanInternal95: 1,
-        temuanEksternal90: 1,
-        potensiFraud: 0,
-        kasusHukum: 0
+        temuanInternal95: -1,
+        temuanEksternal90: -1,
+        potensiFraud: -1,
+        kasusHukum: -1
       });
     }
   };
@@ -233,10 +242,10 @@ export const FaktorRisikoTemuanFraudView: React.FC = () => {
     setNewItem({
       program: '',
       namaOPD: '',
-      temuanInternal95: 1,
-      temuanEksternal90: 1,
-      potensiFraud: 0,
-      kasusHukum: 0
+      temuanInternal95: -1,
+      temuanEksternal90: -1,
+      potensiFraud: -1,
+      kasusHukum: -1
     });
     setShowAddModal(true);
   };
@@ -244,13 +253,29 @@ export const FaktorRisikoTemuanFraudView: React.FC = () => {
   const handleToggleCriteria = (id: string, field: 'temuanInternal95' | 'temuanEksternal90' | 'potensiFraud' | 'kasusHukum') => {
     const updated = data.map(item => {
       if (item.id === id) {
-        const newVal = (item[field] === 1 ? 0 : 1) as 0 | 1;
+        // Siklus tri-state: -1 (Belum Diisi) -> 1 (Ya) -> 0 (Tidak) -> -1 (Belum Diisi)
+        const cur = item[field];
+        let newVal: 0 | 1 | -1 = 1;
+        if (cur === 1) {
+          newVal = 0;
+        } else if (cur === 0) {
+          newVal = -1;
+        } else {
+          newVal = 1;
+        }
+
         const updatedItem = { ...item, [field]: newVal };
-        const totalNilai = updatedItem.temuanInternal95 + updatedItem.temuanEksternal90 + updatedItem.potensiFraud + updatedItem.kasusHukum;
+        const isComplete = updatedItem.temuanInternal95 !== -1 && 
+                           updatedItem.temuanEksternal90 !== -1 && 
+                           updatedItem.potensiFraud !== -1 && 
+                           updatedItem.kasusHukum !== -1;
+        const totalNilai = isComplete 
+          ? (updatedItem.temuanInternal95 + updatedItem.temuanEksternal90 + updatedItem.potensiFraud + updatedItem.kasusHukum) 
+          : -1;
         return {
           ...updatedItem,
           nilai: totalNilai,
-          skala: calculateSkala(totalNilai)
+          skala: isComplete ? calculateSkala(totalNilai) : 0
         };
       }
       return item;
@@ -262,7 +287,13 @@ export const FaktorRisikoTemuanFraudView: React.FC = () => {
     e.preventDefault();
     if (!newItem.program.trim()) return;
 
-    const totalNilai = newItem.temuanInternal95 + newItem.temuanEksternal90 + newItem.potensiFraud + newItem.kasusHukum;
+    const isComplete = newItem.temuanInternal95 !== -1 && 
+                       newItem.temuanEksternal90 !== -1 && 
+                       newItem.potensiFraud !== -1 && 
+                       newItem.kasusHukum !== -1;
+    const totalNilai = isComplete ? (newItem.temuanInternal95 + newItem.temuanEksternal90 + newItem.potensiFraud + newItem.kasusHukum) : -1;
+    const skala = isComplete ? calculateSkala(totalNilai) : 0;
+
     const item: FaktorRisikoTemuanFraudItem = {
       id: `ftf-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       no: data.length + 1,
@@ -273,12 +304,12 @@ export const FaktorRisikoTemuanFraudView: React.FC = () => {
       potensiFraud: newItem.potensiFraud,
       kasusHukum: newItem.kasusHukum,
       nilai: totalNilai,
-      skala: calculateSkala(totalNilai)
+      skala: skala
     };
     const updated = [...data, item];
     handleSaveData(updated);
     setShowAddModal(false);
-    setNewItem({ program: '', namaOPD: '', temuanInternal95: 1, temuanEksternal90: 1, potensiFraud: 0, kasusHukum: 0 });
+    setNewItem({ program: '', namaOPD: '', temuanInternal95: -1, temuanEksternal90: -1, potensiFraud: -1, kasusHukum: -1 });
   };
 
   const handleOpenEdit = (item: FaktorRisikoTemuanFraudItem) => {
@@ -289,13 +320,19 @@ export const FaktorRisikoTemuanFraudView: React.FC = () => {
   const handleSaveEdit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingItem) return;
-    const totalNilai = editingItem.temuanInternal95 + editingItem.temuanEksternal90 + editingItem.potensiFraud + editingItem.kasusHukum;
+    const isComplete = editingItem.temuanInternal95 !== -1 && 
+                       editingItem.temuanEksternal90 !== -1 && 
+                       editingItem.potensiFraud !== -1 && 
+                       editingItem.kasusHukum !== -1;
+    const totalNilai = isComplete ? (editingItem.temuanInternal95 + editingItem.temuanEksternal90 + editingItem.potensiFraud + editingItem.kasusHukum) : -1;
+    const skala = isComplete ? calculateSkala(totalNilai) : 0;
+
     const updatedItem: FaktorRisikoTemuanFraudItem = {
       ...editingItem,
       program: editingItem.program.trim(),
       namaOPD: editingItem.namaOPD.trim(),
       nilai: totalNilai,
-      skala: calculateSkala(totalNilai)
+      skala: skala
     };
     const updated = data.map(d => d.id === updatedItem.id ? updatedItem : d);
     handleSaveData(updated);
@@ -347,20 +384,20 @@ export const FaktorRisikoTemuanFraudView: React.FC = () => {
   const requestResetAllPenilaian = () => {
     setConfirmModal({
       isOpen: true,
-      title: 'Hapus Seluruh Penilaian Temuan & Fraud?',
-      message: `Apakah Anda yakin ingin menghapus/mereset penilaian untuk seluruh program (${data.length} program)?`,
-      detail: 'Seluruh checklist temuan internal, temuan eksternal, potensi fraud, dan kasus hukum akan di-reset menjadi 0 (Skala 1). Nama program dan OPD tetap aman di tabel.',
+      title: 'Reset Seluruh Penilaian Temuan & Fraud?',
+      message: `Apakah Anda yakin ingin mereset penilaian untuk seluruh program (${data.length} program)?`,
+      detail: 'Seluruh checklist kriteria temuan internal, temuan eksternal, potensi fraud, dan kasus hukum akan di-reset menjadi status "Belum Diisi" (-1) sehingga evaluator harus menilai ulang secara nyata. Nama program dan OPD tetap aman di tabel.',
       confirmText: 'Ya, Reset Semua Penilaian',
       variant: 'warning',
       onConfirm: () => {
         const updated = data.map(d => ({
           ...d,
-          temuanInternal95: 0 as const,
-          temuanEksternal90: 0 as const,
-          potensiFraud: 0 as const,
-          kasusHukum: 0 as const,
-          nilai: 0,
-          skala: 1
+          temuanInternal95: -1 as const,
+          temuanEksternal90: -1 as const,
+          potensiFraud: -1 as const,
+          kasusHukum: -1 as const,
+          nilai: -1,
+          skala: 0
         }));
         handleSaveData(updated);
       }
@@ -396,10 +433,10 @@ export const FaktorRisikoTemuanFraudView: React.FC = () => {
         const synced: FaktorRisikoTemuanFraudItem[] = menu1List.map((item, idx) => {
           const matchExisting = existingMap.get(item.programRpjmd.toLowerCase().trim());
           
-          let temuanInternal95: 0 | 1 = 1;
-          let temuanEksternal90: 0 | 1 = 1;
-          let potensiFraud: 0 | 1 = 0;
-          let kasusHukum: 0 | 1 = 0;
+          let temuanInternal95: 0 | 1 | -1 = -1;
+          let temuanEksternal90: 0 | 1 | -1 = -1;
+          let potensiFraud: 0 | 1 | -1 = -1;
+          let kasusHukum: 0 | 1 | -1 = -1;
 
           if (matchExisting) {
             temuanInternal95 = matchExisting.temuanInternal95;
@@ -408,7 +445,13 @@ export const FaktorRisikoTemuanFraudView: React.FC = () => {
             kasusHukum = matchExisting.kasusHukum;
           }
 
-          const totalNilai = temuanInternal95 + temuanEksternal90 + potensiFraud + kasusHukum;
+          const isComplete = temuanInternal95 !== -1 && 
+                             temuanEksternal90 !== -1 && 
+                             potensiFraud !== -1 && 
+                             kasusHukum !== -1;
+          const totalNilai = isComplete 
+            ? (temuanInternal95 + temuanEksternal90 + potensiFraud + kasusHukum) 
+            : -1;
 
           return {
             id: matchExisting?.id || `ftf-sync-${idx + 1}-${Date.now()}`,
@@ -420,7 +463,7 @@ export const FaktorRisikoTemuanFraudView: React.FC = () => {
             potensiFraud,
             kasusHukum,
             nilai: totalNilai,
-            skala: calculateSkala(totalNilai)
+            skala: isComplete ? calculateSkala(totalNilai) : 0
           };
         });
 
@@ -467,11 +510,10 @@ export const FaktorRisikoTemuanFraudView: React.FC = () => {
 
     const startNo = data.length;
     const additions: FaktorRisikoTemuanFraudItem[] = newItemsFromMenu1.map((item, idx) => {
-      const temuanInternal95: 0 | 1 = 1;
-      const temuanEksternal90: 0 | 1 = 1;
-      const potensiFraud: 0 | 1 = 0;
-      const kasusHukum: 0 | 1 = 0;
-      const totalNilai = temuanInternal95 + temuanEksternal90 + potensiFraud + kasusHukum;
+      const temuanInternal95: 0 | 1 | -1 = -1;
+      const temuanEksternal90: 0 | 1 | -1 = -1;
+      const potensiFraud: 0 | 1 | -1 = -1;
+      const kasusHukum: 0 | 1 | -1 = -1;
 
       return {
         id: `ftf-new-${Date.now()}-${idx}`,
@@ -482,8 +524,8 @@ export const FaktorRisikoTemuanFraudView: React.FC = () => {
         temuanEksternal90,
         potensiFraud,
         kasusHukum,
-        nilai: totalNilai,
-        skala: calculateSkala(totalNilai)
+        nilai: -1,
+        skala: 0
       };
     });
 
@@ -640,7 +682,7 @@ export const FaktorRisikoTemuanFraudView: React.FC = () => {
               <Plus className="w-4 h-4" />
               <span>Tambah Data</span>
             </button>
-            {data.length > 0 && (
+            {isAdmin && data.length > 0 && (
               <button
                 onClick={requestResetAllPenilaian}
                 className="px-3 py-2 bg-slate-800 hover:bg-rose-900/60 text-slate-300 hover:text-rose-200 border border-slate-700 rounded-xl text-xs font-medium flex items-center gap-1.5 transition"
@@ -834,17 +876,23 @@ export const FaktorRisikoTemuanFraudView: React.FC = () => {
                         className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
                           item.temuanInternal95 === 1
                             ? 'bg-rose-100 text-rose-800 border border-rose-300 hover:bg-rose-200'
-                            : 'bg-slate-100 text-slate-400 border border-slate-200 hover:bg-slate-200'
+                            : item.temuanInternal95 === 0
+                            ? 'bg-slate-100 text-slate-500 border border-slate-300 hover:bg-slate-200'
+                            : 'bg-amber-50 text-amber-800 border border-dashed border-amber-300 hover:bg-amber-100'
                         }`}
-                        title="Klik untuk mengubah status TL APIP"
+                        title="Klik untuk mengubah: Belum Diisi -> Ya -> Tidak -> Belum Diisi"
                       >
                         {item.temuanInternal95 === 1 ? (
                           <>
                             <CheckCircle2 className="w-3.5 h-3.5 text-rose-600" /> Ya (1)
                           </>
-                        ) : (
+                        ) : item.temuanInternal95 === 0 ? (
                           <>
                             <XCircle className="w-3.5 h-3.5 text-slate-400" /> Tidak (0)
+                          </>
+                        ) : (
+                          <>
+                            <AlertCircle className="w-3.5 h-3.5 text-amber-500" /> Belum Diisi (-)
                           </>
                         )}
                       </button>
@@ -857,17 +905,23 @@ export const FaktorRisikoTemuanFraudView: React.FC = () => {
                         className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
                           item.temuanEksternal90 === 1
                             ? 'bg-rose-100 text-rose-800 border border-rose-300 hover:bg-rose-200'
-                            : 'bg-slate-100 text-slate-400 border border-slate-200 hover:bg-slate-200'
+                            : item.temuanEksternal90 === 0
+                            ? 'bg-slate-100 text-slate-500 border border-slate-300 hover:bg-slate-200'
+                            : 'bg-amber-50 text-amber-800 border border-dashed border-amber-300 hover:bg-amber-100'
                         }`}
-                        title="Klik untuk mengubah status TL BPK"
+                        title="Klik untuk mengubah: Belum Diisi -> Ya -> Tidak -> Belum Diisi"
                       >
                         {item.temuanEksternal90 === 1 ? (
                           <>
                             <CheckCircle2 className="w-3.5 h-3.5 text-rose-600" /> Ya (1)
                           </>
-                        ) : (
+                        ) : item.temuanEksternal90 === 0 ? (
                           <>
                             <XCircle className="w-3.5 h-3.5 text-slate-400" /> Tidak (0)
+                          </>
+                        ) : (
+                          <>
+                            <AlertCircle className="w-3.5 h-3.5 text-amber-500" /> Belum Diisi (-)
                           </>
                         )}
                       </button>
@@ -880,17 +934,23 @@ export const FaktorRisikoTemuanFraudView: React.FC = () => {
                         className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
                           item.potensiFraud === 1
                             ? 'bg-amber-100 text-amber-800 border border-amber-300 hover:bg-amber-200'
-                            : 'bg-slate-100 text-slate-400 border border-slate-200 hover:bg-slate-200'
+                            : item.potensiFraud === 0
+                            ? 'bg-slate-100 text-slate-500 border border-slate-300 hover:bg-slate-200'
+                            : 'bg-amber-50 text-amber-800 border border-dashed border-amber-300 hover:bg-amber-100'
                         }`}
-                        title="Klik untuk mengubah status Potensi Fraud"
+                        title="Klik untuk mengubah: Belum Diisi -> Ya -> Tidak -> Belum Diisi"
                       >
                         {item.potensiFraud === 1 ? (
                           <>
                             <CheckCircle2 className="w-3.5 h-3.5 text-amber-600" /> Ya (1)
                           </>
-                        ) : (
+                        ) : item.potensiFraud === 0 ? (
                           <>
                             <XCircle className="w-3.5 h-3.5 text-slate-400" /> Tidak (0)
+                          </>
+                        ) : (
+                          <>
+                            <AlertCircle className="w-3.5 h-3.5 text-amber-500" /> Belum Diisi (-)
                           </>
                         )}
                       </button>
@@ -903,17 +963,23 @@ export const FaktorRisikoTemuanFraudView: React.FC = () => {
                         className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
                           item.kasusHukum === 1
                             ? 'bg-red-100 text-red-800 border border-red-300 hover:bg-red-200'
-                            : 'bg-slate-100 text-slate-400 border border-slate-200 hover:bg-slate-200'
+                            : item.kasusHukum === 0
+                            ? 'bg-slate-100 text-slate-500 border border-slate-300 hover:bg-slate-200'
+                            : 'bg-amber-50 text-amber-800 border border-dashed border-amber-300 hover:bg-amber-100'
                         }`}
-                        title="Klik untuk mengubah status Kasus Hukum APH"
+                        title="Klik untuk mengubah: Belum Diisi -> Ya -> Tidak -> Belum Diisi"
                       >
                         {item.kasusHukum === 1 ? (
                           <>
                             <CheckCircle2 className="w-3.5 h-3.5 text-red-600" /> Ya (1)
                           </>
-                        ) : (
+                        ) : item.kasusHukum === 0 ? (
                           <>
                             <XCircle className="w-3.5 h-3.5 text-slate-400" /> Tidak (0)
+                          </>
+                        ) : (
+                          <>
+                            <AlertCircle className="w-3.5 h-3.5 text-amber-500" /> Belum Diisi (-)
                           </>
                         )}
                       </button>
@@ -921,20 +987,30 @@ export const FaktorRisikoTemuanFraudView: React.FC = () => {
 
                     {/* Total Skor */}
                     <td className="p-3 text-center font-extrabold text-rose-900 bg-rose-50/40 text-sm">
-                      {item.nilai} / 4
+                      {item.nilai >= 0 && item.temuanInternal95 !== -1 && item.temuanEksternal90 !== -1 && item.potensiFraud !== -1 && item.kasusHukum !== -1 ? (
+                        `${item.nilai} / 4`
+                      ) : (
+                        <span className="text-slate-400 italic font-semibold text-xs">-</span>
+                      )}
                     </td>
 
                     {/* Skala Risiko */}
                     <td className="p-3 text-center">
-                      <span className={`inline-block px-3 py-1 rounded-full text-xs font-extrabold ${
-                        item.skala >= 4
-                          ? 'bg-rose-100 text-rose-800 border border-rose-300'
-                          : item.skala === 3
-                          ? 'bg-amber-100 text-amber-800 border border-amber-300'
-                          : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                      }`}>
-                        Skala {item.skala}
-                      </span>
+                      {item.skala > 0 && item.nilai >= 0 && item.temuanInternal95 !== -1 && item.temuanEksternal90 !== -1 && item.potensiFraud !== -1 && item.kasusHukum !== -1 ? (
+                        <span className={`inline-block px-3 py-1 rounded-full text-xs font-extrabold ${
+                          item.skala >= 4
+                            ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                            : item.skala === 3
+                            ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                            : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                        }`}>
+                          Skala {item.skala}
+                        </span>
+                      ) : (
+                        <span className="inline-block px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                          Belum Dinilai
+                        </span>
+                      )}
                     </td>
 
                     {/* Aksi */}
@@ -1069,72 +1145,188 @@ export const FaktorRisikoTemuanFraudView: React.FC = () => {
                 )}
               </div>
 
-              {/* Kriteria Checklist */}
-              <div className="space-y-2 pt-2 border-t border-slate-100">
+              {/* Kriteria Tri-state Selector */}
+              <div className="space-y-3 pt-2 border-t border-slate-100">
                 <span className="block text-xs font-bold text-slate-800">Indikator Kriteria Temuan & Integritas:</span>
 
-                <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer p-2 rounded-lg hover:bg-slate-50 border border-slate-200">
-                  <input
-                    type="checkbox"
-                    checked={newItem.temuanInternal95 === 1}
-                    onChange={e => setNewItem({ ...newItem, temuanInternal95: e.target.checked ? 1 : 0 })}
-                    className="rounded text-rose-600 w-4 h-4"
-                  />
-                  <div>
-                    <span className="font-semibold block">Tindak Lanjut Temuan Internal APIP &le; 95%</span>
-                    <span className="text-[11px] text-slate-500">Penyelesaian rekomendasi inspektorat belum mencapai target</span>
+                <div className="p-2.5 rounded-xl border border-slate-200 bg-white space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-xs text-slate-800">1. Tindak Lanjut Temuan Internal APIP &le; 95%</span>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      newItem.temuanInternal95 === 1 ? 'bg-emerald-100 text-emerald-800' : newItem.temuanInternal95 === 0 ? 'bg-slate-100 text-slate-600' : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      {newItem.temuanInternal95 === 1 ? 'Ya (1)' : newItem.temuanInternal95 === 0 ? 'Tidak (0)' : 'Belum Diisi'}
+                    </span>
                   </div>
-                </label>
+                  <div className="flex items-center gap-1.5 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, temuanInternal95: -1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.temuanInternal95 === -1 ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Belum Diisi
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, temuanInternal95: 1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.temuanInternal95 === 1 ? 'bg-rose-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Ya (1)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, temuanInternal95: 0 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.temuanInternal95 === 0 ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Tidak (0)
+                    </button>
+                  </div>
+                </div>
 
-                <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer p-2 rounded-lg hover:bg-slate-50 border border-slate-200">
-                  <input
-                    type="checkbox"
-                    checked={newItem.temuanEksternal90 === 1}
-                    onChange={e => setNewItem({ ...newItem, temuanEksternal90: e.target.checked ? 1 : 0 })}
-                    className="rounded text-rose-600 w-4 h-4"
-                  />
-                  <div>
-                    <span className="font-semibold block">Tindak Lanjut Temuan Eksternal BPK &le; 90%</span>
-                    <span className="text-[11px] text-slate-500">Penyelesaian rekomendasi BPK belum memenuhi target</span>
+                <div className="p-2.5 rounded-xl border border-slate-200 bg-white space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-xs text-slate-800">2. Tindak Lanjut Temuan Eksternal BPK &le; 90%</span>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      newItem.temuanEksternal90 === 1 ? 'bg-emerald-100 text-emerald-800' : newItem.temuanEksternal90 === 0 ? 'bg-slate-100 text-slate-600' : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      {newItem.temuanEksternal90 === 1 ? 'Ya (1)' : newItem.temuanEksternal90 === 0 ? 'Tidak (0)' : 'Belum Diisi'}
+                    </span>
                   </div>
-                </label>
+                  <div className="flex items-center gap-1.5 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, temuanEksternal90: -1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.temuanEksternal90 === -1 ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Belum Diisi
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, temuanEksternal90: 1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.temuanEksternal90 === 1 ? 'bg-rose-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Ya (1)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, temuanEksternal90: 0 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.temuanEksternal90 === 0 ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Tidak (0)
+                    </button>
+                  </div>
+                </div>
 
-                <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer p-2 rounded-lg hover:bg-slate-50 border border-slate-200">
-                  <input
-                    type="checkbox"
-                    checked={newItem.potensiFraud === 1}
-                    onChange={e => setNewItem({ ...newItem, potensiFraud: e.target.checked ? 1 : 0 })}
-                    className="rounded text-amber-600 w-4 h-4"
-                  />
-                  <div>
-                    <span className="font-semibold block">Terdapat Potensi / Riwayat Indikasi Fraud</span>
-                    <span className="text-[11px] text-slate-500">Indikasi kerugian negara, gratifikasi, pungli, atau kelemahan SPI</span>
+                <div className="p-2.5 rounded-xl border border-slate-200 bg-white space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-xs text-slate-800">3. Terdapat Potensi / Riwayat Indikasi Fraud</span>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      newItem.potensiFraud === 1 ? 'bg-amber-100 text-amber-800' : newItem.potensiFraud === 0 ? 'bg-slate-100 text-slate-600' : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      {newItem.potensiFraud === 1 ? 'Ya (1)' : newItem.potensiFraud === 0 ? 'Tidak (0)' : 'Belum Diisi'}
+                    </span>
                   </div>
-                </label>
+                  <div className="flex items-center gap-1.5 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, potensiFraud: -1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.potensiFraud === -1 ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Belum Diisi
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, potensiFraud: 1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.potensiFraud === 1 ? 'bg-amber-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Ya (1)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, potensiFraud: 0 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.potensiFraud === 0 ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Tidak (0)
+                    </button>
+                  </div>
+                </div>
 
-                <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer p-2 rounded-lg hover:bg-slate-50 border border-slate-200">
-                  <input
-                    type="checkbox"
-                    checked={newItem.kasusHukum === 1}
-                    onChange={e => setNewItem({ ...newItem, kasusHukum: e.target.checked ? 1 : 0 })}
-                    className="rounded text-red-600 w-4 h-4"
-                  />
-                  <div>
-                    <span className="font-semibold block">Sedang Ditangani oleh Aparat Penegak Hukum (APH)</span>
-                    <span className="text-[11px] text-slate-500">Dalam penyelidikan/penyidikan Kejaksaan, Kepolisian, atau KPK</span>
+                <div className="p-2.5 rounded-xl border border-slate-200 bg-white space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-xs text-slate-800">4. Sedang Ditangani oleh Aparat Penegak Hukum (APH)</span>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      newItem.kasusHukum === 1 ? 'bg-rose-100 text-rose-800' : newItem.kasusHukum === 0 ? 'bg-slate-100 text-slate-600' : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      {newItem.kasusHukum === 1 ? 'Ya (1)' : newItem.kasusHukum === 0 ? 'Tidak (0)' : 'Belum Diisi'}
+                    </span>
                   </div>
-                </label>
+                  <div className="flex items-center gap-1.5 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, kasusHukum: -1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.kasusHukum === -1 ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Belum Diisi
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, kasusHukum: 1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.kasusHukum === 1 ? 'bg-red-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Ya (1)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, kasusHukum: 0 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.kasusHukum === 0 ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Tidak (0)
+                    </button>
+                  </div>
+                </div>
 
                 {/* Preview Nilai & Skala */}
                 <div className="bg-rose-50 p-2.5 rounded-lg border border-rose-200 flex items-center justify-between text-xs mt-2">
                   <span className="text-rose-900 font-medium">Hasil Penilaian Awal:</span>
                   <div className="flex items-center gap-2">
-                    <span className="font-bold text-rose-900">
-                      Skor: {newItem.temuanInternal95 + newItem.temuanEksternal90 + newItem.potensiFraud + newItem.kasusHukum}/4
-                    </span>
-                    <span className="px-2 py-0.5 bg-rose-200 text-rose-900 font-extrabold rounded">
-                      Skala {calculateSkala(newItem.temuanInternal95 + newItem.temuanEksternal90 + newItem.potensiFraud + newItem.kasusHukum)}
-                    </span>
+                    {newItem.temuanInternal95 !== -1 && newItem.temuanEksternal90 !== -1 && newItem.potensiFraud !== -1 && newItem.kasusHukum !== -1 ? (
+                      <>
+                        <span className="font-bold text-rose-900">
+                          Skor: {newItem.temuanInternal95 + newItem.temuanEksternal90 + newItem.potensiFraud + newItem.kasusHukum}/4
+                        </span>
+                        <span className="px-2 py-0.5 bg-rose-200 text-rose-900 font-extrabold rounded">
+                          Skala {calculateSkala(newItem.temuanInternal95 + newItem.temuanEksternal90 + newItem.potensiFraud + newItem.kasusHukum)}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="px-2 py-0.5 bg-amber-100 text-amber-800 font-bold rounded border border-amber-300">
+                        Belum Lengkap (Skor Belum Muncul)
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1208,71 +1400,188 @@ export const FaktorRisikoTemuanFraudView: React.FC = () => {
                 </div>
               </div>
 
-              <div className="space-y-2 pt-2 border-t border-slate-100">
+              {/* Kriteria Tri-state Selector Edit */}
+              <div className="space-y-3 pt-2 border-t border-slate-100">
                 <span className="block text-xs font-bold text-slate-800">Indikator Kriteria:</span>
 
-                <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer p-2 rounded-lg hover:bg-slate-50 border border-slate-200">
-                  <input
-                    type="checkbox"
-                    checked={editingItem.temuanInternal95 === 1}
-                    onChange={e => setEditingItem({ ...editingItem, temuanInternal95: e.target.checked ? 1 : 0 })}
-                    className="rounded text-rose-600 w-4 h-4"
-                  />
-                  <div>
-                    <span className="font-semibold block">Tindak Lanjut Temuan Internal APIP &le; 95%</span>
-                    <span className="text-[11px] text-slate-500">Penyelesaian rekomendasi inspektorat belum mencapai target</span>
+                <div className="p-2.5 rounded-xl border border-slate-200 bg-white space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-xs text-slate-800">1. Tindak Lanjut Temuan Internal APIP &le; 95%</span>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      editingItem.temuanInternal95 === 1 ? 'bg-emerald-100 text-emerald-800' : editingItem.temuanInternal95 === 0 ? 'bg-slate-100 text-slate-600' : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      {editingItem.temuanInternal95 === 1 ? 'Ya (1)' : editingItem.temuanInternal95 === 0 ? 'Tidak (0)' : 'Belum Diisi'}
+                    </span>
                   </div>
-                </label>
+                  <div className="flex items-center gap-1.5 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, temuanInternal95: -1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.temuanInternal95 === -1 ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Belum Diisi
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, temuanInternal95: 1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.temuanInternal95 === 1 ? 'bg-rose-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Ya (1)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, temuanInternal95: 0 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.temuanInternal95 === 0 ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Tidak (0)
+                    </button>
+                  </div>
+                </div>
 
-                <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer p-2 rounded-lg hover:bg-slate-50 border border-slate-200">
-                  <input
-                    type="checkbox"
-                    checked={editingItem.temuanEksternal90 === 1}
-                    onChange={e => setEditingItem({ ...editingItem, temuanEksternal90: e.target.checked ? 1 : 0 })}
-                    className="rounded text-rose-600 w-4 h-4"
-                  />
-                  <div>
-                    <span className="font-semibold block">Tindak Lanjut Temuan Eksternal BPK &le; 90%</span>
-                    <span className="text-[11px] text-slate-500">Penyelesaian rekomendasi BPK belum memenuhi target</span>
+                <div className="p-2.5 rounded-xl border border-slate-200 bg-white space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-xs text-slate-800">2. Tindak Lanjut Temuan Eksternal BPK &le; 90%</span>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      editingItem.temuanEksternal90 === 1 ? 'bg-emerald-100 text-emerald-800' : editingItem.temuanEksternal90 === 0 ? 'bg-slate-100 text-slate-600' : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      {editingItem.temuanEksternal90 === 1 ? 'Ya (1)' : editingItem.temuanEksternal90 === 0 ? 'Tidak (0)' : 'Belum Diisi'}
+                    </span>
                   </div>
-                </label>
+                  <div className="flex items-center gap-1.5 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, temuanEksternal90: -1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.temuanEksternal90 === -1 ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Belum Diisi
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, temuanEksternal90: 1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.temuanEksternal90 === 1 ? 'bg-rose-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Ya (1)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, temuanEksternal90: 0 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.temuanEksternal90 === 0 ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Tidak (0)
+                    </button>
+                  </div>
+                </div>
 
-                <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer p-2 rounded-lg hover:bg-slate-50 border border-slate-200">
-                  <input
-                    type="checkbox"
-                    checked={editingItem.potensiFraud === 1}
-                    onChange={e => setEditingItem({ ...editingItem, potensiFraud: e.target.checked ? 1 : 0 })}
-                    className="rounded text-amber-600 w-4 h-4"
-                  />
-                  <div>
-                    <span className="font-semibold block">Terdapat Potensi / Riwayat Indikasi Fraud</span>
-                    <span className="text-[11px] text-slate-500">Indikasi kerugian negara, pungli, gratifikasi, atau kelemahan SPI</span>
+                <div className="p-2.5 rounded-xl border border-slate-200 bg-white space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-xs text-slate-800">3. Terdapat Potensi / Riwayat Indikasi Fraud</span>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      editingItem.potensiFraud === 1 ? 'bg-amber-100 text-amber-800' : editingItem.potensiFraud === 0 ? 'bg-slate-100 text-slate-600' : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      {editingItem.potensiFraud === 1 ? 'Ya (1)' : editingItem.potensiFraud === 0 ? 'Tidak (0)' : 'Belum Diisi'}
+                    </span>
                   </div>
-                </label>
+                  <div className="flex items-center gap-1.5 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, potensiFraud: -1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.potensiFraud === -1 ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Belum Diisi
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, potensiFraud: 1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.potensiFraud === 1 ? 'bg-amber-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Ya (1)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, potensiFraud: 0 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.potensiFraud === 0 ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Tidak (0)
+                    </button>
+                  </div>
+                </div>
 
-                <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer p-2 rounded-lg hover:bg-slate-50 border border-slate-200">
-                  <input
-                    type="checkbox"
-                    checked={editingItem.kasusHukum === 1}
-                    onChange={e => setEditingItem({ ...editingItem, kasusHukum: e.target.checked ? 1 : 0 })}
-                    className="rounded text-red-600 w-4 h-4"
-                  />
-                  <div>
-                    <span className="font-semibold block">Sedang Ditangani oleh Aparat Penegak Hukum (APH)</span>
-                    <span className="text-[11px] text-slate-500">Dalam penyelidikan/penyidikan Kejaksaan, Kepolisian, atau KPK</span>
+                <div className="p-2.5 rounded-xl border border-slate-200 bg-white space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-xs text-slate-800">4. Sedang Ditangani oleh Aparat Penegak Hukum (APH)</span>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      editingItem.kasusHukum === 1 ? 'bg-rose-100 text-rose-800' : editingItem.kasusHukum === 0 ? 'bg-slate-100 text-slate-600' : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      {editingItem.kasusHukum === 1 ? 'Ya (1)' : editingItem.kasusHukum === 0 ? 'Tidak (0)' : 'Belum Diisi'}
+                    </span>
                   </div>
-                </label>
+                  <div className="flex items-center gap-1.5 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, kasusHukum: -1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.kasusHukum === -1 ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Belum Diisi
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, kasusHukum: 1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.kasusHukum === 1 ? 'bg-red-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Ya (1)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, kasusHukum: 0 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.kasusHukum === 0 ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Tidak (0)
+                    </button>
+                  </div>
+                </div>
 
                 {/* Preview Hasil Edit */}
                 <div className="bg-rose-50 p-2.5 rounded-lg border border-rose-200 flex items-center justify-between text-xs mt-2">
                   <span className="text-rose-900 font-medium">Hasil Penilaian:</span>
                   <div className="flex items-center gap-2">
-                    <span className="font-bold text-rose-900">
-                      Skor: {editingItem.temuanInternal95 + editingItem.temuanEksternal90 + editingItem.potensiFraud + editingItem.kasusHukum}/4
-                    </span>
-                    <span className="px-2 py-0.5 bg-rose-200 text-rose-900 font-extrabold rounded">
-                      Skala {calculateSkala(editingItem.temuanInternal95 + editingItem.temuanEksternal90 + editingItem.potensiFraud + editingItem.kasusHukum)}
-                    </span>
+                    {editingItem.temuanInternal95 !== -1 && editingItem.temuanEksternal90 !== -1 && editingItem.potensiFraud !== -1 && editingItem.kasusHukum !== -1 ? (
+                      <>
+                        <span className="font-bold text-rose-900">
+                          Skor: {editingItem.temuanInternal95 + editingItem.temuanEksternal90 + editingItem.potensiFraud + editingItem.kasusHukum}/4
+                        </span>
+                        <span className="px-2 py-0.5 bg-rose-200 text-rose-900 font-extrabold rounded">
+                          Skala {calculateSkala(editingItem.temuanInternal95 + editingItem.temuanEksternal90 + editingItem.potensiFraud + editingItem.kasusHukum)}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="px-2 py-0.5 bg-amber-100 text-amber-800 font-bold rounded border border-amber-300">
+                        Belum Lengkap (Skor Belum Muncul)
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
