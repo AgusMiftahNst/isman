@@ -32,11 +32,14 @@ import {
   ArrowLeft
 } from 'lucide-react';
 
+import { getSelectedYear } from './ppbrYearHelper';
+
 export interface PPBRMasterContainerProps {
   activeSubMenu?: string;
   onSelectSubMenu?: (menuId: string) => void;
   onBackToRiskSelection?: () => void;
   isAdmin?: boolean;
+  year?: string;
 }
 
 export const PPBR_MENUS = [
@@ -60,19 +63,21 @@ export const PPBRMasterContainer: React.FC<PPBRMasterContainerProps> = ({
   activeSubMenu = 'ppbr-1',
   onSelectSubMenu,
   onBackToRiskSelection,
-  isAdmin: isAdminProp
+  isAdmin: isAdminProp,
+  year
 }) => {
   const [internalMenu, setInternalMenu] = useState<string>(activeSubMenu);
+  const activeYear = year || getSelectedYear();
 
   const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
     try {
       const saved = localStorage.getItem('isman_user');
       if (saved) {
         const u = JSON.parse(saved);
-        return u.role === 'Administrator' || u.username?.toLowerCase() === 'admin';
+        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.role === 'Operator' || u.role === 'Inspektur' || u.username?.toLowerCase() === 'admin' || u.username?.toLowerCase() === 'inspektur';
       }
     } catch (_) {}
-    return false;
+    return true;
   })();
 
   const currentMenuId = onSelectSubMenu ? activeSubMenu : internalMenu;
@@ -87,35 +92,35 @@ export const PPBRMasterContainer: React.FC<PPBRMasterContainerProps> = ({
   const renderContent = () => {
     switch (currentMenuId) {
       case 'ppbr-1':
-        return <AuditUniverseView isAdmin={isAdmin} />;
+        return <AuditUniverseView key={`au-${activeYear}`} isAdmin={isAdmin} year={activeYear} />;
       case 'ppbr-2':
-        return <EvaluasiRegisterRisikoView />;
+        return <EvaluasiRegisterRisikoView key={`err-${activeYear}`} isAdmin={isAdmin} year={activeYear} />;
       case 'ppbr-3':
-        return <KematanganMRView />;
+        return <KematanganMRView key={`kmr-${activeYear}`} isAdmin={isAdmin} year={activeYear} />;
       case 'ppbr-4':
-        return <FaktorRisikoAnggaranView />;
+        return <FaktorRisikoAnggaranView key={`fra-${activeYear}`} isAdmin={isAdmin} year={activeYear} />;
       case 'ppbr-5':
-        return <FaktorRisikoProgramUnggulanView />;
+        return <FaktorRisikoProgramUnggulanView key={`fpu-${activeYear}`} isAdmin={isAdmin} year={activeYear} />;
       case 'ppbr-6':
-        return <FaktorRisikoTemuanFraudView />;
+        return <FaktorRisikoTemuanFraudView key={`frt-${activeYear}`} isAdmin={isAdmin} year={activeYear} />;
       case 'ppbr-7':
-        return <FaktorRisikoIsuTerkiniView />;
+        return <FaktorRisikoIsuTerkiniView key={`fit-${activeYear}`} isAdmin={isAdmin} year={activeYear} />;
       case 'ppbr-8':
-        return <PrioritasProgramRPJMDView />;
+        return <PrioritasProgramRPJMDView key={`ppr-${activeYear}`} isAdmin={isAdmin} year={activeYear} />;
       case 'ppbr-9':
-        return <PrioritasUnitKerjaOPDView />;
+        return <PrioritasUnitKerjaOPDView key={`puo-${activeYear}`} isAdmin={isAdmin} year={activeYear} />;
       case 'ppbr-10':
-        return <PrioritasDesaPuskesmasView />;
+        return <PrioritasDesaPuskesmasView key={`pdp-${activeYear}`} isAdmin={isAdmin} year={activeYear} />;
       case 'ppbr-11':
-        return <UsulanPrioritasPengawasanView />;
+        return <UsulanPrioritasPengawasanView key={`upp-${activeYear}`} isAdmin={isAdmin} year={activeYear} />;
       case 'ppbr-12':
-        return <AreaPengawasanMandatoryView isAdmin={isAdmin} />;
+        return <AreaPengawasanMandatoryView key={`apm-${activeYear}`} isAdmin={isAdmin} year={activeYear} />;
       case 'ppbr-13':
-        return <AreaTidakMasukPKPTView />;
+        return <AreaTidakMasukPKPTView key={`atm-${activeYear}`} year={activeYear} />;
       case 'ppbr-14':
-        return <FormatPKPTBerbasisRisikoView />;
+        return <FormatPKPTBerbasisRisikoView key={`fpb-${activeYear}`} year={activeYear} />;
       default:
-        return <AuditUniverseView isAdmin={isAdmin} />;
+        return <AuditUniverseView key={`au-def-${activeYear}`} isAdmin={isAdmin} year={activeYear} />;
     }
   };
 
