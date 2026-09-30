@@ -113,10 +113,10 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
       const saved = localStorage.getItem('isman_user');
       if (saved) {
         const u = JSON.parse(saved);
-        return u.role === 'Administrator' || u.username?.toLowerCase() === 'admin';
+        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.role === 'Operator' || u.role === 'Inspektur' || u.username?.toLowerCase() === 'admin' || u.username?.toLowerCase() === 'inspektur';
       }
     } catch (_) {}
-    return false;
+    return true;
   })();
 
   // Main data state loaded from localStorage initially
