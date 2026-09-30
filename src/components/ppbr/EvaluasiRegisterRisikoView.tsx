@@ -4,6 +4,7 @@ import { exportToExcel, exportToPdf } from './ppbrExport';
 import { ConfirmModal } from '../common/ConfirmModal';
 import { db } from '../../lib/firebase';
 import { collection, getDocs, query, where } from 'firebase/firestore';
+import { getScopedKey, getSelectedYear, DEFAULT_YEAR, AVAILABLE_YEARS } from './ppbrYearHelper';
 import {
   ShieldCheck,
   Plus,
@@ -52,18 +53,37 @@ interface SyncPreviewItem {
   rtpBaru: string;
 }
 
-export const EvaluasiRegisterRisikoView: React.FC = () => {
+export interface EvaluasiRegisterRisikoViewProps {
+  isAdmin?: boolean;
+  year?: string;
+}
+
+export const EvaluasiRegisterRisikoView: React.FC<EvaluasiRegisterRisikoViewProps> = ({ isAdmin: isAdminProp, year }) => {
+  const currentYear = year || getSelectedYear();
+  const storageKey = getScopedKey('ppbr_evaluasi_register', currentYear);
+
+  const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
+    try {
+      const saved = localStorage.getItem('isman_user');
+      if (saved) {
+        const u = JSON.parse(saved);
+        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.role === 'Operator' || u.role === 'Inspektur' || u.username?.toLowerCase() === 'admin' || u.username?.toLowerCase() === 'inspektur';
+      }
+    } catch (_) {}
+    return true;
+  })();
+
   const [data, setData] = useState<EvaluasiRegisterRisikoItem[]>(() => {
-    const saved = localStorage.getItem('ppbr_evaluasi_register');
+    const saved = localStorage.getItem(storageKey);
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       } catch (e) {
-        console.error('Failed to parse ppbr_evaluasi_register', e);
+        console.error('Failed to parse ' + storageKey, e);
       }
     }
-    return INITIAL_EVALUASI_REGISTER;
+    return currentYear === DEFAULT_YEAR ? INITIAL_EVALUASI_REGISTER : [];
   });
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -95,7 +115,7 @@ export const EvaluasiRegisterRisikoView: React.FC = () => {
 
   const handleSaveData = (newData: EvaluasiRegisterRisikoItem[]) => {
     setData(newData);
-    localStorage.setItem('ppbr_evaluasi_register', JSON.stringify(newData));
+    localStorage.setItem(storageKey, JSON.stringify(newData));
   };
 
   // Direct cell update
@@ -115,11 +135,15 @@ export const EvaluasiRegisterRisikoView: React.FC = () => {
 
         // Auto-recalculate Setelah Nilai Risiko
         if (field === 'setelahSkalaDampak' || field === 'setelahSkalaKemungkinan') {
-          const d = field === 'setelahSkalaDampak' ? Math.max(1, Math.min(5, Number(value) || 1)) : item.setelahSkalaDampak;
-          const k = field === 'setelahSkalaKemungkinan' ? Math.max(1, Math.min(5, Number(value) || 1)) : item.setelahSkalaKemungkinan;
+          const rawD = field === 'setelahSkalaDampak' ? value : item.setelahSkalaDampak;
+          const rawK = field === 'setelahSkalaKemungkinan' ? value : item.setelahSkalaKemungkinan;
+          const numD = Number(rawD);
+          const numK = Number(rawK);
+          const d = (!isNaN(numD) && numD > 0) ? Math.max(1, Math.min(5, numD)) : 0;
+          const k = (!isNaN(numK) && numK > 0) ? Math.max(1, Math.min(5, numK)) : 0;
           nextItem.setelahSkalaDampak = d;
           nextItem.setelahSkalaKemungkinan = k;
-          nextItem.setelahNilaiRisiko = d * k;
+          nextItem.setelahNilaiRisiko = (d > 0 && k > 0) ? d * k : 0;
         }
 
         return nextItem;
@@ -184,9 +208,9 @@ export const EvaluasiRegisterRisikoView: React.FC = () => {
       setelahControl: 'C',
       setelahDampakUraian: '',
       setelahDampakPihak: '',
-      setelahSkalaDampak: 3,
-      setelahSkalaKemungkinan: 3,
-      setelahNilaiRisiko: 9,
+      setelahSkalaDampak: 0,
+      setelahSkalaKemungkinan: 0,
+      setelahNilaiRisiko: 0,
       setelahRencanaPengendalian: ''
     };
     const updated = [...data, newRow];
@@ -224,9 +248,9 @@ export const EvaluasiRegisterRisikoView: React.FC = () => {
         setelahControl: 'C',
         setelahDampakUraian: '',
         setelahDampakPihak: '',
-        setelahSkalaDampak: 3,
-        setelahSkalaKemungkinan: 3,
-        setelahNilaiRisiko: 9,
+        setelahSkalaDampak: 0,
+        setelahSkalaKemungkinan: 0,
+        setelahNilaiRisiko: 0,
         setelahRencanaPengendalian: ''
       });
     }
@@ -274,9 +298,9 @@ export const EvaluasiRegisterRisikoView: React.FC = () => {
       setelahControl: 'C',
       setelahDampakUraian: '',
       setelahDampakPihak: '',
-      setelahSkalaDampak: 3,
-      setelahSkalaKemungkinan: 3,
-      setelahNilaiRisiko: 9,
+      setelahSkalaDampak: 0,
+      setelahSkalaKemungkinan: 0,
+      setelahNilaiRisiko: 0,
       setelahRencanaPengendalian: ''
     };
 
@@ -321,6 +345,30 @@ export const EvaluasiRegisterRisikoView: React.FC = () => {
     });
   };
 
+  // Reset Penilaian (Admin Only) - Mengosongkan penilaian setelah evaluasi APIP tanpa menghapus baris data
+  const requestResetPenilaian = () => {
+    setConfirmModal({
+      isOpen: true,
+      title: 'Reset Semua Penilaian Evaluasi APIP?',
+      message: `Apakah Anda yakin ingin mereset seluruh penilaian evaluasi APIP (${data.length} baris risiko)?`,
+      detail: 'Skala dampak (D) dan kemungkinan (K) setelah evaluasi APIP akan dikosongkan (menjadi "Belum Diisi" dengan nilai 0). Nama program, indikator, dan data awal OPD tetap utuh sehingga evaluator dapat mengisi penilaian mandiri secara nyata.',
+      confirmText: 'Ya, Reset Penilaian',
+      variant: 'warning',
+      onConfirm: () => {
+        const resetItems = data.map(item => ({
+          ...item,
+          setelahSkalaDampak: 0,
+          setelahSkalaKemungkinan: 0,
+          setelahNilaiRisiko: 0,
+          setelahRencanaPengendalian: ''
+        }));
+        handleSaveData(resetItems);
+        setSyncNotice('Seluruh skala penilaian evaluasi APIP (D & K) berhasil direset ke status Belum Diisi.');
+        setTimeout(() => setSyncNotice(null), 5000);
+      }
+    });
+  };
+
   // -------------------------------------------------------------
   // SINKRONISASI DARI RISIKO STRATEGIS SEMUA OPD (RSO)
   // Penghubung: Program RPJMD di Menu 1 PPBR (Audit Universe)
@@ -342,16 +390,14 @@ export const EvaluasiRegisterRisikoView: React.FC = () => {
 
     try {
       // 1. Ambil Program RPJMD dari Menu 1 (Audit Universe)
-      let auditUniverseList: AuditUniverseItem[] = [];
-      const savedAu = localStorage.getItem('ppbr_audit_universe');
+      const auStorageKey = getScopedKey('ppbr_audit_universe', currentYear);
+      let auditUniverseList: AuditUniverseItem[] = currentYear === DEFAULT_YEAR ? INITIAL_AUDIT_UNIVERSE : [];
+      const savedAu = localStorage.getItem(auStorageKey);
       if (savedAu) {
         try {
           const parsed = JSON.parse(savedAu);
           if (Array.isArray(parsed) && parsed.length > 0) auditUniverseList = parsed;
         } catch (e) {}
-      }
-      if (auditUniverseList.length === 0) {
-        auditUniverseList = INITIAL_AUDIT_UNIVERSE;
       }
 
       // Kumpulkan semua program RPJMD dari Menu 1
@@ -391,19 +437,43 @@ export const EvaluasiRegisterRisikoView: React.FC = () => {
         for (let i = 0; i < localStorage.length; i++) {
           const key = localStorage.key(i);
           if (key && key.startsWith('cached_context_')) {
-            try {
-              const c = JSON.parse(localStorage.getItem(key) || '{}');
-              if (c) contexts.push({ ...c, id: key.replace('cached_context_', 'risk_context_') });
-            } catch (e) {}
+            const matchesYear = currentYear === DEFAULT_YEAR 
+              ? !AVAILABLE_YEARS.some(y => y !== DEFAULT_YEAR && key.endsWith(`_${y}`))
+              : key.endsWith(`_${currentYear}`);
+            if (matchesYear) {
+              try {
+                const c = JSON.parse(localStorage.getItem(key) || '{}');
+                if (c) contexts.push({ ...c, id: key.replace('cached_context_', 'risk_context_') });
+              } catch (e) {}
+            }
           }
           if (key && key.startsWith('cached_risk_id_rows_')) {
-            try {
-              const rList = JSON.parse(localStorage.getItem(key) || '[]');
-              if (Array.isArray(rList)) risks.push(...rList);
-            } catch (e) {}
+            const matchesYear = currentYear === DEFAULT_YEAR 
+              ? !AVAILABLE_YEARS.some(y => y !== DEFAULT_YEAR && key.endsWith(`_${y}`))
+              : key.endsWith(`_${currentYear}`);
+            if (matchesYear) {
+              try {
+                const rList = JSON.parse(localStorage.getItem(key) || '[]');
+                if (Array.isArray(rList)) risks.push(...rList);
+              } catch (e) {}
+            }
           }
         }
       }
+
+      // Filter contexts and risks for selected year
+      contexts = contexts.filter(c => {
+        if (currentYear === DEFAULT_YEAR) {
+          return (!c.year && !c.tahun) || c.year === DEFAULT_YEAR || c.tahun === DEFAULT_YEAR || !AVAILABLE_YEARS.some(y => y !== DEFAULT_YEAR && c.id?.endsWith(`_${y}`));
+        }
+        return c.year === currentYear || c.tahun === currentYear || c.id?.endsWith(`_${currentYear}`);
+      });
+      risks = risks.filter(r => {
+        if (currentYear === DEFAULT_YEAR) {
+          return (!r.year && !r.tahun) || r.year === DEFAULT_YEAR || r.tahun === DEFAULT_YEAR;
+        }
+        return r.year === currentYear || r.tahun === currentYear;
+      });
 
       // 3. Pencocokan Program RPJMD Menu 1 <-> Program Strategis di Konteks OPD
       for (const pRpjmd of rpjmdPrograms) {
@@ -923,6 +993,16 @@ export const EvaluasiRegisterRisikoView: React.FC = () => {
               <Plus className="w-3.5 h-3.5 text-teal-300" />
               <span>+5 Baris</span>
             </button>
+            {isAdmin && data.length > 0 && (
+              <button
+                onClick={requestResetPenilaian}
+                className="px-3 py-2 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-xs"
+                title="Kosongkan seluruh nilai skala penilaian APIP (D & K) agar dapat dinilai manual dari awal"
+              >
+                <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
+                <span>Reset Penilaian</span>
+              </button>
+            )}
             {data.length > 0 && (
               <button
                 onClick={requestResetData}
@@ -1065,8 +1145,8 @@ export const EvaluasiRegisterRisikoView: React.FC = () => {
                 <th className="p-2 border-r border-slate-800 min-w-[140px]">Sebab & Sumber</th>
                 <th className="p-2 border-r border-slate-800 w-16">C/UC</th>
                 <th className="p-2 border-r border-slate-800 min-w-[140px]">Dampak & Pihak</th>
-                <th className="p-2 border-r border-slate-800 w-12 text-emerald-300 font-bold">D (Sisa)</th>
-                <th className="p-2 border-r border-slate-800 w-12 text-emerald-300 font-bold">K (Sisa)</th>
+                <th className="p-2 border-r border-slate-800 w-20 text-emerald-300 font-bold">D (Sisa)</th>
+                <th className="p-2 border-r border-slate-800 w-20 text-emerald-300 font-bold">K (Sisa)</th>
                 <th className="p-2 border-r border-slate-800 w-14 font-extrabold text-emerald-400 bg-slate-950">Nilai APIP</th>
                 <th className="p-2 border-r border-slate-800 min-w-[180px] text-emerald-300 font-bold">Rencana Tindak (RTP Baru)</th>
               </tr>
@@ -1360,37 +1440,70 @@ export const EvaluasiRegisterRisikoView: React.FC = () => {
                       </td>
 
                       {/* D (Setelah APIP) */}
-                      <td className="p-1 text-center border-r border-slate-200 bg-teal-50/40">
-                        <input
-                          type="number"
-                          min={1}
-                          max={5}
-                          value={item.setelahSkalaDampak}
-                          onChange={e => handleCellChange(item.id, 'setelahSkalaDampak', Number(e.target.value))}
-                          className="w-full text-center text-xs font-bold text-teal-950 border border-transparent hover:border-teal-300 focus:border-teal-500 rounded p-1 bg-transparent focus:outline-hidden"
-                        />
+                      <td className={`p-1 text-center border-r border-slate-200 ${
+                        !item.setelahSkalaDampak || item.setelahSkalaDampak <= 0 ? 'bg-amber-50/50' : 'bg-teal-50/40'
+                      }`}>
+                        <select
+                          value={item.setelahSkalaDampak > 0 ? item.setelahSkalaDampak : ''}
+                          onChange={e => handleCellChange(item.id, 'setelahSkalaDampak', e.target.value)}
+                          title={!item.setelahSkalaDampak || item.setelahSkalaDampak <= 0 ? "Belum diisi. Pilih skala dampak evaluasi (1-5)" : `Dampak: ${item.setelahSkalaDampak}`}
+                          className={`w-full text-center text-xs font-bold rounded p-1 transition cursor-pointer focus:outline-hidden ${
+                            !item.setelahSkalaDampak || item.setelahSkalaDampak <= 0
+                              ? 'border border-dashed border-amber-300 text-amber-800 bg-amber-50/80 font-medium'
+                              : 'text-teal-950 border border-teal-200 bg-teal-50/50 font-bold'
+                          }`}
+                        >
+                          <option value="">Belum Diisi</option>
+                          <option value="1">1</option>
+                          <option value="2">2</option>
+                          <option value="3">3</option>
+                          <option value="4">4</option>
+                          <option value="5">5</option>
+                        </select>
                       </td>
 
                       {/* K (Setelah APIP) */}
-                      <td className="p-1 text-center border-r border-slate-200 bg-teal-50/40">
-                        <input
-                          type="number"
-                          min={1}
-                          max={5}
-                          value={item.setelahSkalaKemungkinan}
-                          onChange={e => handleCellChange(item.id, 'setelahSkalaKemungkinan', Number(e.target.value))}
-                          className="w-full text-center text-xs font-bold text-teal-950 border border-transparent hover:border-teal-300 focus:border-teal-500 rounded p-1 bg-transparent focus:outline-hidden"
-                        />
+                      <td className={`p-1 text-center border-r border-slate-200 ${
+                        !item.setelahSkalaKemungkinan || item.setelahSkalaKemungkinan <= 0 ? 'bg-amber-50/50' : 'bg-teal-50/40'
+                      }`}>
+                        <select
+                          value={item.setelahSkalaKemungkinan > 0 ? item.setelahSkalaKemungkinan : ''}
+                          onChange={e => handleCellChange(item.id, 'setelahSkalaKemungkinan', e.target.value)}
+                          title={!item.setelahSkalaKemungkinan || item.setelahSkalaKemungkinan <= 0 ? "Belum diisi. Pilih skala kemungkinan evaluasi (1-5)" : `Kemungkinan: ${item.setelahSkalaKemungkinan}`}
+                          className={`w-full text-center text-xs font-bold rounded p-1 transition cursor-pointer focus:outline-hidden ${
+                            !item.setelahSkalaKemungkinan || item.setelahSkalaKemungkinan <= 0
+                              ? 'border border-dashed border-amber-300 text-amber-800 bg-amber-50/80 font-medium'
+                              : 'text-teal-950 border border-teal-200 bg-teal-50/50 font-bold'
+                          }`}
+                        >
+                          <option value="">Belum Diisi</option>
+                          <option value="1">1</option>
+                          <option value="2">2</option>
+                          <option value="3">3</option>
+                          <option value="4">4</option>
+                          <option value="5">5</option>
+                        </select>
                       </td>
 
                       {/* Nilai (Setelah APIP) */}
-                      <td className="p-1 text-center border-r border-slate-200 bg-emerald-100/50">
-                        <span className="font-black text-xs text-emerald-950 block">
-                          {item.setelahNilaiRisiko}
-                        </span>
-                        <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded inline-block mt-0.5 ${stlhBadge.bg}`}>
-                          {stlhBadge.label.split(' ')[0]}
-                        </span>
+                      <td className="p-1 text-center border-r border-slate-200 bg-emerald-100/30">
+                        {item.setelahNilaiRisiko > 0 && item.setelahSkalaDampak > 0 && item.setelahSkalaKemungkinan > 0 ? (
+                          <>
+                            <span className="font-black text-xs text-emerald-950 block">
+                              {item.setelahNilaiRisiko}
+                            </span>
+                            <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded inline-block mt-0.5 ${stlhBadge.bg}`}>
+                              {stlhBadge.label.split(' ')[0]}
+                            </span>
+                          </>
+                        ) : (
+                          <div className="py-1">
+                            <span className="text-[10px] font-bold text-amber-800 bg-amber-100/80 px-1.5 py-0.5 rounded border border-amber-300 block">
+                              Belum Diisi
+                            </span>
+                            <span className="text-[9px] text-slate-400 block mt-0.5">Isi D & K</span>
+                          </div>
+                        )}
                       </td>
 
                       {/* Rencana Tindak Pengendalian (RTP Baru) */}
