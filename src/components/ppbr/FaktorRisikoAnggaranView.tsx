@@ -7,6 +7,7 @@ import {
 } from './ppbrData';
 import { exportToExcel, exportToPdf } from './ppbrExport';
 import { ConfirmModal } from '../common/ConfirmModal';
+import { getScopedKey, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
 import {
   Coins,
   Plus,
@@ -36,8 +37,9 @@ const calculateSkalaStatic = (pct: number): number => {
 };
 
 // Helper: Membaca data Audit Universe dari Menu 1
-const getAuditUniverseData = (): AuditUniverseItem[] => {
-  const saved = localStorage.getItem('ppbr_audit_universe');
+const getAuditUniverseData = (targetYear?: string): AuditUniverseItem[] => {
+  const currentY = targetYear || getSelectedYear();
+  const saved = localStorage.getItem(getScopedKey('ppbr_audit_universe', currentY));
   if (saved) {
     try {
       const parsed = JSON.parse(saved);
@@ -48,7 +50,7 @@ const getAuditUniverseData = (): AuditUniverseItem[] => {
       console.error('Failed to parse ppbr_audit_universe', e);
     }
   }
-  return INITIAL_AUDIT_UNIVERSE;
+  return currentY === DEFAULT_YEAR ? INITIAL_AUDIT_UNIVERSE : [];
 };
 
 // Helper: Mengambil daftar unik program RPJMD dan OPD pengampu langsung dari Menu 1
@@ -61,8 +63,8 @@ interface Menu1Program {
   sasaranRpjmd?: string;
 }
 
-const getMenu1ProgramsList = (): Menu1Program[] => {
-  const auList = getAuditUniverseData();
+const getMenu1ProgramsList = (targetYear?: string): Menu1Program[] => {
+  const auList = getAuditUniverseData(targetYear);
   const map = new Map<string, Menu1Program>();
 
   auList.forEach((item, idx) => {
@@ -96,26 +98,50 @@ const getMenu1ProgramsList = (): Menu1Program[] => {
   return Array.from(map.values());
 };
 
-export const FaktorRisikoAnggaranView: React.FC = () => {
+export interface FaktorRisikoAnggaranViewProps {
+  isAdmin?: boolean;
+  year?: string;
+}
+
+export const FaktorRisikoAnggaranView: React.FC<FaktorRisikoAnggaranViewProps> = ({ isAdmin: isAdminProp, year }) => {
+  const currentYear = year || getSelectedYear();
+  const storageKey = getScopedKey('ppbr_faktor_anggaran', currentYear);
+  const apbdKey = getScopedKey('ppbr_total_apbd', currentYear);
+
+  const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
+    try {
+      const saved = localStorage.getItem('isman_user');
+      if (saved) {
+        const u = JSON.parse(saved);
+        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.role === 'Operator' || u.role === 'Inspektur' || u.username?.toLowerCase() === 'admin' || u.username?.toLowerCase() === 'inspektur';
+      }
+    } catch (_) {}
+    return true;
+  })();
+
   const [totalAPBD, setTotalAPBD] = useState<number>(() => {
-    const saved = localStorage.getItem('ppbr_total_apbd');
+    const saved = localStorage.getItem(apbdKey);
     return saved ? Number(saved) : 480500000000; // Rp 480.5 Milyar default
   });
 
   // Inisialisasi data: Jika belum ada di localStorage, otomatis ambil dari Program RPJMD & OPD di Menu 1
   const [data, setData] = useState<FaktorRisikoAnggaranItem[]>(() => {
-    const saved = localStorage.getItem('ppbr_faktor_anggaran');
+    const saved = localStorage.getItem(storageKey);
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       } catch (e) {
-        console.error('Failed to parse ppbr_faktor_anggaran', e);
+        console.error('Failed to parse ' + storageKey, e);
       }
     }
 
+    if (currentYear !== DEFAULT_YEAR) {
+      return [];
+    }
+
     // Auto-populate dari Program RPJMD dan OPD Menu 1
-    const menu1List = getMenu1ProgramsList();
+    const menu1List = getMenu1ProgramsList(currentYear);
     if (menu1List.length > 0) {
       const defaultAPBD = 480500000000;
       return menu1List.map((item, idx) => {
@@ -177,13 +203,13 @@ export const FaktorRisikoAnggaranView: React.FC = () => {
 
   const handleSaveData = (newData: FaktorRisikoAnggaranItem[]) => {
     setData(newData);
-    localStorage.setItem('ppbr_faktor_anggaran', JSON.stringify(newData));
+    localStorage.setItem(storageKey, JSON.stringify(newData));
   };
 
   // Daftar program dari Menu 1 terkini
   const menu1Programs = useMemo(() => {
-    return getMenu1ProgramsList();
-  }, [showAddModal, showEditModal, showSyncModal]);
+    return getMenu1ProgramsList(currentYear);
+  }, [showAddModal, showEditModal, showSyncModal, currentYear]);
 
   // Saat memilih program RPJMD dari Menu 1 di Modal Tambah:
   const handleSelectProgramFromMenu1 = (progName: string) => {
@@ -304,7 +330,7 @@ export const FaktorRisikoAnggaranView: React.FC = () => {
 
   const handleRecalculateAll = (newTotal: number) => {
     setTotalAPBD(newTotal);
-    localStorage.setItem('ppbr_total_apbd', String(newTotal));
+    localStorage.setItem(apbdKey, String(newTotal));
     const updated = data.map(d => {
       const pct = newTotal > 0 ? (d.anggaran / newTotal) * 100 : 0;
       return {
@@ -318,7 +344,7 @@ export const FaktorRisikoAnggaranView: React.FC = () => {
 
   // --- LOGIKA SINKRONISASI DARI MENU 1 ---
   const handleOpenSyncModal = () => {
-    const list = getMenu1ProgramsList();
+    const list = getMenu1ProgramsList(currentYear);
     // Default: pilih semua program dari Menu 1
     setSelectedSyncPrograms(list.map(p => p.programRpjmd));
     setSyncSearch('');
@@ -590,7 +616,7 @@ export const FaktorRisikoAnggaranView: React.FC = () => {
               <Plus className="w-4 h-4" />
               <span>Tambah Data</span>
             </button>
-            {data.length > 0 && (
+            {isAdmin && data.length > 0 && (
               <button
                 onClick={requestResetAllPenilaian}
                 className="px-3 py-2 bg-slate-800 hover:bg-amber-900/60 text-slate-300 hover:text-amber-200 border border-slate-700 rounded-xl text-xs font-medium flex items-center gap-1.5 transition"
