@@ -36,7 +36,22 @@ import {
   Building2
 } from 'lucide-react';
 
-export const PrioritasProgramRPJMDView: React.FC = () => {
+export interface PrioritasProgramRPJMDViewProps {
+  isAdmin?: boolean;
+}
+
+export const PrioritasProgramRPJMDView: React.FC<PrioritasProgramRPJMDViewProps> = ({ isAdmin: isAdminProp }) => {
+  const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
+    try {
+      const saved = localStorage.getItem('isman_user');
+      if (saved) {
+        const u = JSON.parse(saved);
+        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.role === 'Operator' || u.role === 'Inspektur' || u.username?.toLowerCase() === 'admin' || u.username?.toLowerCase() === 'inspektur';
+      }
+    } catch (_) {}
+    return true;
+  })();
+
   const [data, setData] = useState<PrioritasProgramRPJMDItem[]>(() => {
     const saved = localStorage.getItem('ppbr_prioritas_program');
     if (saved) {
@@ -129,9 +144,9 @@ export const PrioritasProgramRPJMDView: React.FC = () => {
       const existing = existingMap.get(key);
 
       const sAnggaran = anggaranMap.get(key)?.skala ?? (existing?.skalaAnggaran ?? 1);
-      const sUnggulan = unggulanMap.get(key)?.skala ?? (existing?.skalaProgramUnggulan ?? 1);
-      const sTemuan = temuanMap.get(key)?.skala ?? (existing?.skalaTemuanFraud ?? 1);
-      const sIsu = isuMap.get(key)?.skala ?? (existing?.skalaIsuTerkini ?? 1);
+      const sUnggulan = unggulanMap.get(key)?.isEvaluated ? unggulanMap.get(key)!.skala : (existing?.skalaProgramUnggulan && existing.skalaProgramUnggulan > 0 ? existing.skalaProgramUnggulan : 0);
+      const sTemuan = temuanMap.get(key)?.isEvaluated ? temuanMap.get(key)!.skala : (existing?.skalaTemuanFraud && existing.skalaTemuanFraud > 0 ? existing.skalaTemuanFraud : 0);
+      const sIsu = isuMap.get(key)?.isEvaluated ? isuMap.get(key)!.skala : (existing?.skalaIsuTerkini && existing.skalaIsuTerkini > 0 ? existing.skalaIsuTerkini : 0);
 
       const sReg = existing?.skalaRegisterRisiko ?? 3.5;
       const sThn = existing?.skalaTahunAudit ?? 3;
@@ -544,7 +559,7 @@ export const PrioritasProgramRPJMDView: React.FC = () => {
               <Plus className="w-3.5 h-3.5" />
               <span>Tambah Manual</span>
             </button>
-            {data.length > 0 && (
+            {isAdmin && data.length > 0 && (
               <button
                 onClick={requestResetAllPenilaian}
                 className="px-3.5 py-2 bg-slate-800 hover:bg-amber-900/60 text-slate-300 hover:text-amber-200 border border-slate-700 rounded-xl text-xs font-medium flex items-center gap-1.5 transition"
@@ -787,11 +802,38 @@ export const PrioritasProgramRPJMDView: React.FC = () => {
                           {Number(item.skalaRegisterRisiko || 0).toFixed(2)}
                         </td>
                         <td className="p-2 text-center text-slate-700 font-semibold">{item.skalaAnggaran ?? 1}</td>
-                        <td className="p-2 text-center text-slate-700 font-semibold">{item.skalaProgramUnggulan ?? 1}</td>
-                        <td className="p-2 text-center text-slate-700 font-semibold">{item.skalaTemuanFraud ?? 1}</td>
-                        <td className="p-2 text-center text-slate-700 font-semibold">{item.skalaIsuTerkini ?? 1}</td>
+                        <td className="p-2 text-center">
+                          {Number(item.skalaProgramUnggulan) > 0 ? (
+                            <span className="font-semibold text-slate-700">{item.skalaProgramUnggulan}</span>
+                          ) : (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                              Belum Diisi
+                            </span>
+                          )}
+                        </td>
+                        <td className="p-2 text-center">
+                          {Number(item.skalaTemuanFraud) > 0 ? (
+                            <span className="font-semibold text-slate-700">{item.skalaTemuanFraud}</span>
+                          ) : (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                              Belum Diisi
+                            </span>
+                          )}
+                        </td>
+                        <td className="p-2 text-center">
+                          {Number(item.skalaIsuTerkini) > 0 ? (
+                            <span className="font-semibold text-slate-700">{item.skalaIsuTerkini}</span>
+                          ) : (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                              Belum Diisi
+                            </span>
+                          )}
+                        </td>
                         <td className="p-2 text-center font-bold text-amber-800 bg-amber-50/40">
-                          {Number(item.rataRataManajemen || 0).toFixed(2)}
+                          {isKDH || (Number(item.skorTotal) > 0 && Number(item.rataRataManajemen) > 0)
+                            ? Number(item.rataRataManajemen || 0).toFixed(2)
+                            : <span className="text-amber-700 font-bold text-xs">-</span>
+                          }
                         </td>
                         <td className="p-1.5 text-center">
                           <select
@@ -845,11 +887,19 @@ export const PrioritasProgramRPJMDView: React.FC = () => {
                           </button>
                         </td>
                         <td className="p-2.5 text-center font-black text-blue-900 text-sm bg-blue-50/50">
-                          {isKDH ? '5.00' : Number(item.skorTotal || 0).toFixed(2)}
+                          {isKDH ? (
+                            '5.00'
+                          ) : Number(item.skorTotal || 0) > 0 ? (
+                            Number(item.skorTotal).toFixed(2)
+                          ) : (
+                            <span className="text-amber-700 font-bold text-xs" title="Skor belum dapat dihitung karena ada faktor risiko di Menu 5, 6, atau 7 yang belum diisi">-</span>
+                          )}
                         </td>
                         <td className="p-2.5 text-center">
                           <span className={`px-2 py-1 rounded-full text-[10px] font-extrabold tracking-wide uppercase inline-flex items-center gap-1 ${
                             isKDH
+                              ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                              : (item.skorTotal || 0) <= 0
                               ? 'bg-amber-100 text-amber-900 border border-amber-300'
                               : (item.skorTotal || 0) >= 3.5
                               ? 'bg-rose-100 text-rose-800 border border-rose-200'
@@ -857,7 +907,7 @@ export const PrioritasProgramRPJMDView: React.FC = () => {
                               ? 'bg-amber-100 text-amber-800 border border-amber-200'
                               : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
                           }`}>
-                            {isKDH ? 'Mandatori KDH' : item.tingkatRisiko || 'Sedang'}
+                            {isKDH ? 'Mandatori KDH' : (item.skorTotal || 0) <= 0 ? 'Belum Lengkap' : item.tingkatRisiko || 'Sedang'}
                           </span>
                         </td>
                         <td className="p-2.5 text-center">
