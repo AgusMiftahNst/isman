@@ -78,9 +78,9 @@ export interface FaktorRisikoProgramUnggulanItem {
   no: number;
   program: string;
   namaOPD: string;
-  terkaitTujuanRpjmd: 0 | 1;
-  mendukungRpjmn: 0 | 1;
-  sektorUnggulan: 0 | 1;
+  terkaitTujuanRpjmd: 0 | 1 | -1;
+  mendukungRpjmn: 0 | 1 | -1;
+  sektorUnggulan: 0 | 1 | -1;
   nilai: number;
   skala: number;
 }
@@ -90,10 +90,10 @@ export interface FaktorRisikoTemuanFraudItem {
   no: number;
   program: string;
   namaOPD: string;
-  temuanInternal95: 0 | 1;
-  temuanEksternal90: 0 | 1;
-  potensiFraud: 0 | 1;
-  kasusHukum: 0 | 1;
+  temuanInternal95: 0 | 1 | -1;
+  temuanEksternal90: 0 | 1 | -1;
+  potensiFraud: 0 | 1 | -1;
+  kasusHukum: 0 | 1 | -1;
   nilai: number;
   skala: number;
 }
@@ -103,10 +103,10 @@ export interface FaktorRisikoIsuTerkiniItem {
   no: number;
   program: string;
   namaOPD: string;
-  sorotanMasyarakat: 0 | 1;
-  isuNasional: 0 | 1;
-  layananPublik: 0 | 1;
-  hajatHidup: 0 | 1;
+  sorotanMasyarakat: 0 | 1 | -1;
+  isuNasional: 0 | 1 | -1;
+  layananPublik: 0 | 1 | -1;
+  hajatHidup: 0 | 1 | -1;
   nilai: number;
   skala: number;
 }
