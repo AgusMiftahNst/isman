@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { KematanganMRItem, INITIAL_KEMATANGAN_MR, AuditUniverseItem, INITIAL_AUDIT_UNIVERSE } from './ppbrData';
 import { exportToExcel, exportToPdf } from './ppbrExport';
 import { ConfirmModal } from '../common/ConfirmModal';
+import { getScopedKey, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
 import {
   BarChart2,
   Plus,
@@ -34,10 +35,29 @@ interface SyncedOpdItem {
   assignedLevel: number;
 }
 
-export const KematanganMRView: React.FC = () => {
+export interface KematanganMRViewProps {
+  isAdmin?: boolean;
+  year?: string;
+}
+
+export const KematanganMRView: React.FC<KematanganMRViewProps> = ({ isAdmin: isAdminProp, year }) => {
+  const currentYear = year || getSelectedYear();
+  const storageKey = getScopedKey('ppbr_kematangan_mr', currentYear);
+
+  const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
+    try {
+      const saved = localStorage.getItem('isman_user');
+      if (saved) {
+        const u = JSON.parse(saved);
+        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.role === 'Operator' || u.role === 'Inspektur' || u.username?.toLowerCase() === 'admin' || u.username?.toLowerCase() === 'inspektur';
+      }
+    } catch (_) {}
+    return true;
+  })();
+
   const [data, setData] = useState<KematanganMRItem[]>(() => {
-    const saved = localStorage.getItem('ppbr_kematangan_mr');
-    return saved ? JSON.parse(saved) : INITIAL_KEMATANGAN_MR;
+    const saved = localStorage.getItem(storageKey);
+    return saved ? JSON.parse(saved) : (currentYear === DEFAULT_YEAR ? INITIAL_KEMATANGAN_MR : []);
   });
 
   const [confirmModal, setConfirmModal] = useState<{
@@ -79,6 +99,13 @@ export const KematanganMRView: React.FC = () => {
 
   const getLevelDetails = (lvl: number) => {
     switch (lvl) {
+      case 0:
+        return {
+          label: 'Belum Dinilai (Level 0)',
+          bobot: 0,
+          strategi: 'Belum ada penetapan tingkat kematangan MR',
+          badge: 'bg-amber-100 text-amber-900 border-amber-300'
+        };
       case 1:
         return {
           label: 'Level 1: Rintisan (Initial)',
@@ -126,7 +153,7 @@ export const KematanganMRView: React.FC = () => {
 
   const handleSaveData = (newData: KematanganMRItem[]) => {
     setData(newData);
-    localStorage.setItem('ppbr_kematangan_mr', JSON.stringify(newData));
+    localStorage.setItem(storageKey, JSON.stringify(newData));
   };
 
   const handleLevelChange = (id: string, newLevel: number) => {
@@ -218,12 +245,37 @@ export const KematanganMRView: React.FC = () => {
     });
   };
 
+  const requestResetPenilaian = () => {
+    setConfirmModal({
+      isOpen: true,
+      title: 'Reset Semua Penilaian Kematangan MR?',
+      message: `Apakah Anda yakin ingin mereset tingkat kematangan MR seluruh OPD (${data.length} unit kerja)?`,
+      detail: 'Tingkat kematangan (Level MR) semua OPD akan diubah menjadi Level 0 (Belum Dinilai) dengan bobot 0%, tanpa menghapus daftar nama OPD yang ada.',
+      confirmText: 'Ya, Reset Penilaian',
+      variant: 'warning',
+      onConfirm: () => {
+        const resetItems = data.map(item => ({
+          ...item,
+          kematanganMR: 0,
+          bobotRegisterRisiko: 0,
+          strategiPengawasan: 'Belum ditetapkan',
+          keterangan: 'Belum dinilai'
+        }));
+        handleSaveData(resetItems);
+        setConfirmModal(prev => ({ ...prev, isOpen: false }));
+        setNotification('Seluruh tingkat kematangan MR OPD berhasil direset ke status Belum Dinilai.');
+        setTimeout(() => setNotification(null), 4000);
+      }
+    });
+  };
+
   // ==========================================
   // OPD SYNCHRONIZATION FROM MENU 1 (AUDIT UNIVERSE)
   // ==========================================
   const handleOpenSyncModal = () => {
     let auData: AuditUniverseItem[] = [];
-    const savedAU = localStorage.getItem('ppbr_audit_universe');
+    const auStorageKey = getScopedKey('ppbr_audit_universe', currentYear);
+    const savedAU = localStorage.getItem(auStorageKey);
     if (savedAU) {
       try {
         const parsed = JSON.parse(savedAU);
@@ -231,10 +283,10 @@ export const KematanganMRView: React.FC = () => {
           auData = parsed;
         }
       } catch (e) {
-        console.error('Failed to parse ppbr_audit_universe', e);
+        console.error('Failed to parse ' + auStorageKey, e);
       }
     }
-    if (auData.length === 0) {
+    if (auData.length === 0 && currentYear === DEFAULT_YEAR) {
       auData = INITIAL_AUDIT_UNIVERSE;
     }
 
@@ -544,6 +596,17 @@ export const KematanganMRView: React.FC = () => {
               <Plus className="w-4 h-4" />
               <span>Tambah Unit Kerja/OPD</span>
             </button>
+
+            {isAdmin && data.length > 0 && (
+              <button
+                onClick={requestResetPenilaian}
+                className="px-3.5 py-2 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-xs"
+                title="Reset tingkat kematangan seluruh OPD menjadi Level 0 (Belum Dinilai)"
+              >
+                <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
+                <span>Reset Penilaian</span>
+              </button>
+            )}
 
             {data.length > 0 && (
               <button
