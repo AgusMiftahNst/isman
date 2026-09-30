@@ -7,6 +7,7 @@ import {
 } from './ppbrData';
 import { exportToExcel, exportToPdf } from './ppbrExport';
 import { ConfirmModal } from '../common/ConfirmModal';
+import { getScopedKey, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
 import { 
   Award, 
   Plus, 
@@ -100,13 +101,29 @@ const getMenu1ProgramsList = (): Menu1ProgramUnggulan[] => {
 };
 
 const calculateSkalaStatic = (val: number): number => {
+  if (val < 0) return 0;
   if (val === 3) return 5;
   if (val === 2) return 3;
   if (val === 1) return 2;
   return 1;
 };
 
-export const FaktorRisikoProgramUnggulanView: React.FC = () => {
+export interface FaktorRisikoProgramUnggulanViewProps {
+  isAdmin?: boolean;
+}
+
+export const FaktorRisikoProgramUnggulanView: React.FC<FaktorRisikoProgramUnggulanViewProps> = ({ isAdmin: isAdminProp }) => {
+  const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
+    try {
+      const saved = localStorage.getItem('isman_user');
+      if (saved) {
+        const u = JSON.parse(saved);
+        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.role === 'Operator' || u.role === 'Inspektur' || u.username?.toLowerCase() === 'admin' || u.username?.toLowerCase() === 'inspektur';
+      }
+    } catch (_) {}
+    return true;
+  })();
+
   // Inisialisasi data: Jika belum ada di localStorage, otomatis ambil dari Program RPJMD & OPD di Menu 1
   const [data, setData] = useState<FaktorRisikoProgramUnggulanItem[]>(() => {
     const saved = localStorage.getItem('ppbr_faktor_unggulan');
@@ -119,27 +136,20 @@ export const FaktorRisikoProgramUnggulanView: React.FC = () => {
       }
     }
 
-    // Auto-populate dari Program RPJMD dan OPD Menu 1
+    // Auto-populate dari Program RPJMD dan OPD Menu 1 dengan kriteria awal Belum Diisi (-1)
     const menu1List = getMenu1ProgramsList();
     if (menu1List.length > 0) {
-      return menu1List.map((item, idx) => {
-        const terkaitTujuanRpjmd: 0 | 1 = 1;
-        const mendukungRpjmn: 0 | 1 = item.prioritasRpjmn && item.prioritasRpjmn.trim().length > 0 ? 1 : 1;
-        const isBukanSektor = item.sektorUnggulan && item.sektorUnggulan.toLowerCase().includes('bukan');
-        const sektorUnggulan: 0 | 1 = isBukanSektor ? 0 : 1;
-        const totalNilai = terkaitTujuanRpjmd + mendukungRpjmn + sektorUnggulan;
-        return {
-          id: `fpu-${idx + 1}-${Date.now()}`,
-          no: idx + 1,
-          program: item.programRpjmd,
-          namaOPD: item.opdPengampu || '',
-          terkaitTujuanRpjmd,
-          mendukungRpjmn,
-          sektorUnggulan,
-          nilai: totalNilai,
-          skala: calculateSkalaStatic(totalNilai)
-        };
-      });
+      return menu1List.map((item, idx) => ({
+        id: `fpu-${idx + 1}-${Date.now()}`,
+        no: idx + 1,
+        program: item.programRpjmd,
+        namaOPD: item.opdPengampu || '',
+        terkaitTujuanRpjmd: -1,
+        mendukungRpjmn: -1,
+        sektorUnggulan: -1,
+        nilai: -1,
+        skala: 0
+      }));
     }
 
     return INITIAL_PROGRAM_UNGGULAN;
@@ -196,6 +206,7 @@ export const FaktorRisikoProgramUnggulanView: React.FC = () => {
   const handleSaveData = (newData: FaktorRisikoProgramUnggulanItem[]) => {
     setData(newData);
     localStorage.setItem('ppbr_faktor_unggulan', JSON.stringify(newData));
+    localStorage.setItem('ppbr_faktor_program_unggulan', JSON.stringify(newData));
   };
 
   // Daftar program dari Menu 1 terkini
@@ -210,22 +221,21 @@ export const FaktorRisikoProgramUnggulanView: React.FC = () => {
       setNewItem({
         program: '',
         namaOPD: '',
-        terkaitTujuanRpjmd: 1,
-        mendukungRpjmn: 1,
-        sektorUnggulan: 1
+        terkaitTujuanRpjmd: -1,
+        mendukungRpjmn: -1,
+        sektorUnggulan: -1
       });
       return;
     }
 
     const found = menu1Programs.find(p => p.programRpjmd === progName);
     if (found) {
-      const isBukanSektor = found.sektorUnggulan && found.sektorUnggulan.toLowerCase().includes('bukan');
       setNewItem({
         program: found.programRpjmd,
         namaOPD: found.opdPengampu || '',
-        terkaitTujuanRpjmd: 1,
-        mendukungRpjmn: found.prioritasRpjmn && found.prioritasRpjmn.trim().length > 0 ? 1 : 1,
-        sektorUnggulan: isBukanSektor ? 0 : 1
+        terkaitTujuanRpjmd: -1,
+        mendukungRpjmn: -1,
+        sektorUnggulan: -1
       });
     }
   };
@@ -236,9 +246,9 @@ export const FaktorRisikoProgramUnggulanView: React.FC = () => {
     setNewItem({
       program: '',
       namaOPD: '',
-      terkaitTujuanRpjmd: 1,
-      mendukungRpjmn: 1,
-      sektorUnggulan: 1
+      terkaitTujuanRpjmd: -1,
+      mendukungRpjmn: -1,
+      sektorUnggulan: -1
     });
     setShowAddModal(true);
   };
@@ -246,13 +256,26 @@ export const FaktorRisikoProgramUnggulanView: React.FC = () => {
   const handleToggleCriteria = (id: string, field: 'terkaitTujuanRpjmd' | 'mendukungRpjmn' | 'sektorUnggulan') => {
     const updated = data.map(item => {
       if (item.id === id) {
-        const newVal = (item[field] === 1 ? 0 : 1) as 0 | 1;
+        // Siklus tri-state: -1 (Belum Diisi) -> 1 (Ya) -> 0 (Tidak) -> -1 (Belum Diisi)
+        const cur = item[field];
+        let newVal: 0 | 1 | -1 = 1;
+        if (cur === 1) {
+          newVal = 0;
+        } else if (cur === 0) {
+          newVal = -1;
+        } else {
+          newVal = 1;
+        }
+
         const updatedItem = { ...item, [field]: newVal };
-        const totalNilai = updatedItem.terkaitTujuanRpjmd + updatedItem.mendukungRpjmn + updatedItem.sektorUnggulan;
+        const isComplete = updatedItem.terkaitTujuanRpjmd !== -1 && updatedItem.mendukungRpjmn !== -1 && updatedItem.sektorUnggulan !== -1;
+        const totalNilai = isComplete 
+          ? (updatedItem.terkaitTujuanRpjmd + updatedItem.mendukungRpjmn + updatedItem.sektorUnggulan) 
+          : -1;
         return {
           ...updatedItem,
           nilai: totalNilai,
-          skala: calculateSkala(totalNilai)
+          skala: isComplete ? calculateSkala(totalNilai) : 0
         };
       }
       return item;
@@ -264,7 +287,10 @@ export const FaktorRisikoProgramUnggulanView: React.FC = () => {
     e.preventDefault();
     if (!newItem.program.trim()) return;
 
-    const totalNilai = newItem.terkaitTujuanRpjmd + newItem.mendukungRpjmn + newItem.sektorUnggulan;
+    const isComplete = newItem.terkaitTujuanRpjmd !== -1 && newItem.mendukungRpjmn !== -1 && newItem.sektorUnggulan !== -1;
+    const totalNilai = isComplete ? (newItem.terkaitTujuanRpjmd + newItem.mendukungRpjmn + newItem.sektorUnggulan) : -1;
+    const skala = isComplete ? calculateSkala(totalNilai) : 0;
+
     const item: FaktorRisikoProgramUnggulanItem = {
       id: `fpu-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       no: data.length + 1,
@@ -274,12 +300,12 @@ export const FaktorRisikoProgramUnggulanView: React.FC = () => {
       mendukungRpjmn: newItem.mendukungRpjmn,
       sektorUnggulan: newItem.sektorUnggulan,
       nilai: totalNilai,
-      skala: calculateSkala(totalNilai)
+      skala: skala
     };
     const updated = [...data, item];
     handleSaveData(updated);
     setShowAddModal(false);
-    setNewItem({ program: '', namaOPD: '', terkaitTujuanRpjmd: 1, mendukungRpjmn: 1, sektorUnggulan: 1 });
+    setNewItem({ program: '', namaOPD: '', terkaitTujuanRpjmd: -1, mendukungRpjmn: -1, sektorUnggulan: -1 });
   };
 
   const handleOpenEdit = (item: FaktorRisikoProgramUnggulanItem) => {
@@ -290,13 +316,16 @@ export const FaktorRisikoProgramUnggulanView: React.FC = () => {
   const handleSaveEdit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingItem) return;
-    const totalNilai = editingItem.terkaitTujuanRpjmd + editingItem.mendukungRpjmn + editingItem.sektorUnggulan;
+    const isComplete = editingItem.terkaitTujuanRpjmd !== -1 && editingItem.mendukungRpjmn !== -1 && editingItem.sektorUnggulan !== -1;
+    const totalNilai = isComplete ? (editingItem.terkaitTujuanRpjmd + editingItem.mendukungRpjmn + editingItem.sektorUnggulan) : -1;
+    const skala = isComplete ? calculateSkala(totalNilai) : 0;
+
     const updatedItem: FaktorRisikoProgramUnggulanItem = {
       ...editingItem,
       program: editingItem.program.trim(),
       namaOPD: editingItem.namaOPD.trim(),
       nilai: totalNilai,
-      skala: calculateSkala(totalNilai)
+      skala: skala
     };
     const updated = data.map(d => d.id === updatedItem.id ? updatedItem : d);
     handleSaveData(updated);
@@ -347,19 +376,19 @@ export const FaktorRisikoProgramUnggulanView: React.FC = () => {
   const requestResetAllPenilaian = () => {
     setConfirmModal({
       isOpen: true,
-      title: 'Hapus Seluruh Penilaian Program Unggulan?',
-      message: `Apakah Anda yakin ingin menghapus/mereset penilaian untuk seluruh program (${data.length} program)?`,
-      detail: 'Seluruh kriteria keterkaitan RPJMD, RPJMN, dan Sektor Unggulan akan di-reset menjadi 0 (Skala 1). Nama program dan OPD tetap aman di tabel.',
+      title: 'Reset Seluruh Penilaian Program Unggulan?',
+      message: `Apakah Anda yakin ingin mereset penilaian untuk seluruh program (${data.length} program)?`,
+      detail: 'Seluruh kriteria keterkaitan RPJMD, RPJMN, dan Sektor Unggulan akan di-reset menjadi status "Belum Diisi" (-1) sehingga evaluator harus menilai ulang secara nyata. Nama program dan OPD tetap aman di tabel.',
       confirmText: 'Ya, Reset Semua Penilaian',
       variant: 'warning',
       onConfirm: () => {
         const updated = data.map(d => ({
           ...d,
-          terkaitTujuanRpjmd: 0 as const,
-          mendukungRpjmn: 0 as const,
-          sektorUnggulan: 0 as const,
-          nilai: 0,
-          skala: 1
+          terkaitTujuanRpjmd: -1 as const,
+          mendukungRpjmn: -1 as const,
+          sektorUnggulan: -1 as const,
+          nilai: -1,
+          skala: 0
         }));
         handleSaveData(updated);
       }
@@ -397,10 +426,9 @@ export const FaktorRisikoProgramUnggulanView: React.FC = () => {
         const synced: FaktorRisikoProgramUnggulanItem[] = menu1List.map((item, idx) => {
           const matchExisting = existingMap.get(item.programRpjmd.toLowerCase().trim());
           
-          let terkaitTujuanRpjmd: 0 | 1 = 1;
-          let mendukungRpjmn: 0 | 1 = item.prioritasRpjmn && item.prioritasRpjmn.trim().length > 0 ? 1 : 1;
-          const isBukanSektor = item.sektorUnggulan && item.sektorUnggulan.toLowerCase().includes('bukan');
-          let sektorUnggulan: 0 | 1 = isBukanSektor ? 0 : 1;
+          let terkaitTujuanRpjmd: 0 | 1 | -1 = -1;
+          let mendukungRpjmn: 0 | 1 | -1 = -1;
+          let sektorUnggulan: 0 | 1 | -1 = -1;
 
           if (matchExisting) {
             terkaitTujuanRpjmd = matchExisting.terkaitTujuanRpjmd;
@@ -408,7 +436,8 @@ export const FaktorRisikoProgramUnggulanView: React.FC = () => {
             sektorUnggulan = matchExisting.sektorUnggulan;
           }
 
-          const totalNilai = terkaitTujuanRpjmd + mendukungRpjmn + sektorUnggulan;
+          const isComplete = terkaitTujuanRpjmd !== -1 && mendukungRpjmn !== -1 && sektorUnggulan !== -1;
+          const totalNilai = isComplete ? (terkaitTujuanRpjmd + mendukungRpjmn + sektorUnggulan) : -1;
 
           return {
             id: matchExisting?.id || `fpu-sync-${idx + 1}-${Date.now()}`,
@@ -419,7 +448,7 @@ export const FaktorRisikoProgramUnggulanView: React.FC = () => {
             mendukungRpjmn,
             sektorUnggulan,
             nilai: totalNilai,
-            skala: calculateSkala(totalNilai)
+            skala: isComplete ? calculateSkala(totalNilai) : 0
           };
         });
 
@@ -468,11 +497,9 @@ export const FaktorRisikoProgramUnggulanView: React.FC = () => {
 
     const startNo = data.length;
     const additions: FaktorRisikoProgramUnggulanItem[] = newItemsFromMenu1.map((item, idx) => {
-      const terkaitTujuanRpjmd: 0 | 1 = 1;
-      const mendukungRpjmn: 0 | 1 = item.prioritasRpjmn && item.prioritasRpjmn.trim().length > 0 ? 1 : 1;
-      const isBukanSektor = item.sektorUnggulan && item.sektorUnggulan.toLowerCase().includes('bukan');
-      const sektorUnggulan: 0 | 1 = isBukanSektor ? 0 : 1;
-      const totalNilai = terkaitTujuanRpjmd + mendukungRpjmn + sektorUnggulan;
+      const terkaitTujuanRpjmd: 0 | 1 | -1 = -1;
+      const mendukungRpjmn: 0 | 1 | -1 = -1;
+      const sektorUnggulan: 0 | 1 | -1 = -1;
 
       return {
         id: `fpu-new-${Date.now()}-${idx}`,
@@ -482,8 +509,8 @@ export const FaktorRisikoProgramUnggulanView: React.FC = () => {
         terkaitTujuanRpjmd,
         mendukungRpjmn,
         sektorUnggulan,
-        nilai: totalNilai,
-        skala: calculateSkala(totalNilai)
+        nilai: -1,
+        skala: 0
       };
     });
 
@@ -638,7 +665,7 @@ export const FaktorRisikoProgramUnggulanView: React.FC = () => {
               <Plus className="w-4 h-4" />
               <span>Tambah Data</span>
             </button>
-            {data.length > 0 && (
+            {isAdmin && data.length > 0 && (
               <button
                 onClick={requestResetAllPenilaian}
                 className="px-3 py-2 bg-slate-800 hover:bg-purple-900/60 text-slate-300 hover:text-purple-200 border border-slate-700 rounded-xl text-xs font-medium flex items-center gap-1.5 transition"
@@ -839,17 +866,23 @@ export const FaktorRisikoProgramUnggulanView: React.FC = () => {
                         className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
                           item.terkaitTujuanRpjmd === 1
                             ? 'bg-emerald-100 text-emerald-800 border border-emerald-300 hover:bg-emerald-200'
-                            : 'bg-slate-100 text-slate-400 border border-slate-200 hover:bg-slate-200'
+                            : item.terkaitTujuanRpjmd === 0
+                            ? 'bg-slate-100 text-slate-500 border border-slate-300 hover:bg-slate-200'
+                            : 'bg-amber-50 text-amber-800 border border-dashed border-amber-300 hover:bg-amber-100'
                         }`}
-                        title="Klik untuk mengubah status Sasaran RPJMD"
+                        title="Klik untuk mengubah: Belum Diisi -> Ya -> Tidak -> Belum Diisi"
                       >
                         {item.terkaitTujuanRpjmd === 1 ? (
                           <>
                             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Ya (1)
                           </>
-                        ) : (
+                        ) : item.terkaitTujuanRpjmd === 0 ? (
                           <>
                             <XCircle className="w-3.5 h-3.5 text-slate-400" /> Tidak (0)
+                          </>
+                        ) : (
+                          <>
+                            <AlertCircle className="w-3.5 h-3.5 text-amber-500" /> Belum Diisi (-)
                           </>
                         )}
                       </button>
@@ -862,17 +895,23 @@ export const FaktorRisikoProgramUnggulanView: React.FC = () => {
                         className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
                           item.mendukungRpjmn === 1
                             ? 'bg-emerald-100 text-emerald-800 border border-emerald-300 hover:bg-emerald-200'
-                            : 'bg-slate-100 text-slate-400 border border-slate-200 hover:bg-slate-200'
+                            : item.mendukungRpjmn === 0
+                            ? 'bg-slate-100 text-slate-500 border border-slate-300 hover:bg-slate-200'
+                            : 'bg-amber-50 text-amber-800 border border-dashed border-amber-300 hover:bg-amber-100'
                         }`}
-                        title="Klik untuk mengubah status Prioritas RPJMN"
+                        title="Klik untuk mengubah: Belum Diisi -> Ya -> Tidak -> Belum Diisi"
                       >
                         {item.mendukungRpjmn === 1 ? (
                           <>
                             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Ya (1)
                           </>
-                        ) : (
+                        ) : item.mendukungRpjmn === 0 ? (
                           <>
                             <XCircle className="w-3.5 h-3.5 text-slate-400" /> Tidak (0)
+                          </>
+                        ) : (
+                          <>
+                            <AlertCircle className="w-3.5 h-3.5 text-amber-500" /> Belum Diisi (-)
                           </>
                         )}
                       </button>
@@ -885,17 +924,23 @@ export const FaktorRisikoProgramUnggulanView: React.FC = () => {
                         className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
                           item.sektorUnggulan === 1
                             ? 'bg-emerald-100 text-emerald-800 border border-emerald-300 hover:bg-emerald-200'
-                            : 'bg-slate-100 text-slate-400 border border-slate-200 hover:bg-slate-200'
+                            : item.sektorUnggulan === 0
+                            ? 'bg-slate-100 text-slate-500 border border-slate-300 hover:bg-slate-200'
+                            : 'bg-amber-50 text-amber-800 border border-dashed border-amber-300 hover:bg-amber-100'
                         }`}
-                        title="Klik untuk mengubah status Sektor Unggulan"
+                        title="Klik untuk mengubah: Belum Diisi -> Ya -> Tidak -> Belum Diisi"
                       >
                         {item.sektorUnggulan === 1 ? (
                           <>
                             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Ya (1)
                           </>
-                        ) : (
+                        ) : item.sektorUnggulan === 0 ? (
                           <>
                             <XCircle className="w-3.5 h-3.5 text-slate-400" /> Tidak (0)
+                          </>
+                        ) : (
+                          <>
+                            <AlertCircle className="w-3.5 h-3.5 text-amber-500" /> Belum Diisi (-)
                           </>
                         )}
                       </button>
@@ -903,20 +948,30 @@ export const FaktorRisikoProgramUnggulanView: React.FC = () => {
 
                     {/* Total Nilai */}
                     <td className="p-3 text-center font-extrabold text-purple-900 bg-purple-50/40 text-sm">
-                      {item.nilai} / 3
+                      {item.nilai >= 0 && item.terkaitTujuanRpjmd !== -1 && item.mendukungRpjmn !== -1 && item.sektorUnggulan !== -1 ? (
+                        `${item.nilai} / 3`
+                      ) : (
+                        <span className="text-slate-400 italic font-semibold text-xs">-</span>
+                      )}
                     </td>
 
                     {/* Skala Risiko */}
                     <td className="p-3 text-center">
-                      <span className={`inline-block px-3 py-1 rounded-full text-xs font-extrabold ${
-                        item.skala === 5
-                          ? 'bg-rose-100 text-rose-800 border border-rose-300'
-                          : item.skala === 3
-                          ? 'bg-amber-100 text-amber-800 border border-amber-300'
-                          : 'bg-blue-100 text-blue-800 border border-blue-300'
-                      }`}>
-                        Skala {item.skala}
-                      </span>
+                      {item.skala > 0 && item.nilai >= 0 && item.terkaitTujuanRpjmd !== -1 && item.mendukungRpjmn !== -1 && item.sektorUnggulan !== -1 ? (
+                        <span className={`inline-block px-3 py-1 rounded-full text-xs font-extrabold ${
+                          item.skala === 5
+                            ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                            : item.skala === 3
+                            ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                            : 'bg-blue-100 text-blue-800 border border-blue-300'
+                        }`}>
+                          Skala {item.skala}
+                        </span>
+                      ) : (
+                        <span className="inline-block px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                          Belum Dinilai
+                        </span>
+                      )}
                     </td>
 
                     {/* Aksi */}
@@ -1051,59 +1106,148 @@ export const FaktorRisikoProgramUnggulanView: React.FC = () => {
                 )}
               </div>
 
-              {/* Kriteria Checklist */}
-              <div className="space-y-2 pt-2 border-t border-slate-100">
+              {/* Kriteria Tri-state Selector */}
+              <div className="space-y-3 pt-2 border-t border-slate-100">
                 <span className="block text-xs font-bold text-slate-800">Kriteria Keterkaitan Strategis:</span>
 
-                <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer p-2 rounded-lg hover:bg-slate-50 border border-slate-200">
-                  <input
-                    type="checkbox"
-                    checked={newItem.terkaitTujuanRpjmd === 1}
-                    onChange={e => setNewItem({ ...newItem, terkaitTujuanRpjmd: e.target.checked ? 1 : 0 })}
-                    className="rounded text-purple-600 w-4 h-4"
-                  />
-                  <div>
-                    <span className="font-semibold block">Terkait langsung Tujuan & Sasaran RPJMD</span>
-                    <span className="text-[11px] text-slate-500">Program merupakan amanat utama dokumen RPJMD</span>
+                <div className="p-2.5 rounded-xl border border-slate-200 bg-white space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-xs text-slate-800">1. Terkait langsung Tujuan & Sasaran RPJMD</span>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      newItem.terkaitTujuanRpjmd === 1 ? 'bg-emerald-100 text-emerald-800' : newItem.terkaitTujuanRpjmd === 0 ? 'bg-slate-100 text-slate-600' : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      {newItem.terkaitTujuanRpjmd === 1 ? 'Ya (1)' : newItem.terkaitTujuanRpjmd === 0 ? 'Tidak (0)' : 'Belum Diisi'}
+                    </span>
                   </div>
-                </label>
+                  <div className="flex items-center gap-1.5 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, terkaitTujuanRpjmd: -1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.terkaitTujuanRpjmd === -1 ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Belum Diisi
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, terkaitTujuanRpjmd: 1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.terkaitTujuanRpjmd === 1 ? 'bg-purple-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Ya (1)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, terkaitTujuanRpjmd: 0 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.terkaitTujuanRpjmd === 0 ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Tidak (0)
+                    </button>
+                  </div>
+                </div>
 
-                <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer p-2 rounded-lg hover:bg-slate-50 border border-slate-200">
-                  <input
-                    type="checkbox"
-                    checked={newItem.mendukungRpjmn === 1}
-                    onChange={e => setNewItem({ ...newItem, mendukungRpjmn: e.target.checked ? 1 : 0 })}
-                    className="rounded text-purple-600 w-4 h-4"
-                  />
-                  <div>
-                    <span className="font-semibold block">Mendukung Prioritas Nasional (RPJMN)</span>
-                    <span className="text-[11px] text-slate-500">Mendukung instruksi presiden / program strategis nasional</span>
+                <div className="p-2.5 rounded-xl border border-slate-200 bg-white space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-xs text-slate-800">2. Mendukung Prioritas Nasional (RPJMN)</span>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      newItem.mendukungRpjmn === 1 ? 'bg-emerald-100 text-emerald-800' : newItem.mendukungRpjmn === 0 ? 'bg-slate-100 text-slate-600' : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      {newItem.mendukungRpjmn === 1 ? 'Ya (1)' : newItem.mendukungRpjmn === 0 ? 'Tidak (0)' : 'Belum Diisi'}
+                    </span>
                   </div>
-                </label>
+                  <div className="flex items-center gap-1.5 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, mendukungRpjmn: -1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.mendukungRpjmn === -1 ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Belum Diisi
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, mendukungRpjmn: 1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.mendukungRpjmn === 1 ? 'bg-purple-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Ya (1)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, mendukungRpjmn: 0 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.mendukungRpjmn === 0 ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Tidak (0)
+                    </button>
+                  </div>
+                </div>
 
-                <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer p-2 rounded-lg hover:bg-slate-50 border border-slate-200">
-                  <input
-                    type="checkbox"
-                    checked={newItem.sektorUnggulan === 1}
-                    onChange={e => setNewItem({ ...newItem, sektorUnggulan: e.target.checked ? 1 : 0 })}
-                    className="rounded text-purple-600 w-4 h-4"
-                  />
-                  <div>
-                    <span className="font-semibold block">Termasuk Sektor Unggulan Daerah</span>
-                    <span className="text-[11px] text-slate-500">Masuk dalam sektor prioritas kepala daerah</span>
+                <div className="p-2.5 rounded-xl border border-slate-200 bg-white space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-xs text-slate-800">3. Termasuk Sektor Unggulan Daerah</span>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      newItem.sektorUnggulan === 1 ? 'bg-emerald-100 text-emerald-800' : newItem.sektorUnggulan === 0 ? 'bg-slate-100 text-slate-600' : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      {newItem.sektorUnggulan === 1 ? 'Ya (1)' : newItem.sektorUnggulan === 0 ? 'Tidak (0)' : 'Belum Diisi'}
+                    </span>
                   </div>
-                </label>
+                  <div className="flex items-center gap-1.5 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, sektorUnggulan: -1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.sektorUnggulan === -1 ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Belum Diisi
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, sektorUnggulan: 1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.sektorUnggulan === 1 ? 'bg-purple-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Ya (1)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, sektorUnggulan: 0 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.sektorUnggulan === 0 ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Tidak (0)
+                    </button>
+                  </div>
+                </div>
 
                 {/* Preview Nilai & Skala */}
                 <div className="bg-purple-50 p-2.5 rounded-lg border border-purple-200 flex items-center justify-between text-xs mt-2">
                   <span className="text-purple-900 font-medium">Hasil Penilaian Awal:</span>
                   <div className="flex items-center gap-2">
-                    <span className="font-bold text-purple-900">
-                      Nilai: {newItem.terkaitTujuanRpjmd + newItem.mendukungRpjmn + newItem.sektorUnggulan}/3
-                    </span>
-                    <span className="px-2 py-0.5 bg-purple-200 text-purple-900 font-extrabold rounded">
-                      Skala {calculateSkala(newItem.terkaitTujuanRpjmd + newItem.mendukungRpjmn + newItem.sektorUnggulan)}
-                    </span>
+                    {newItem.terkaitTujuanRpjmd !== -1 && newItem.mendukungRpjmn !== -1 && newItem.sektorUnggulan !== -1 ? (
+                      <>
+                        <span className="font-bold text-purple-900">
+                          Nilai: {newItem.terkaitTujuanRpjmd + newItem.mendukungRpjmn + newItem.sektorUnggulan}/3
+                        </span>
+                        <span className="px-2 py-0.5 bg-purple-200 text-purple-900 font-extrabold rounded">
+                          Skala {calculateSkala(newItem.terkaitTujuanRpjmd + newItem.mendukungRpjmn + newItem.sektorUnggulan)}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="px-2 py-0.5 bg-amber-100 text-amber-800 font-bold rounded border border-amber-300">
+                        Belum Lengkap (Skor Belum Muncul)
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1177,49 +1321,148 @@ export const FaktorRisikoProgramUnggulanView: React.FC = () => {
                 </div>
               </div>
 
-              <div className="space-y-2 pt-2 border-t border-slate-100">
+              {/* Kriteria Tri-state Selector Edit */}
+              <div className="space-y-3 pt-2 border-t border-slate-100">
                 <span className="block text-xs font-bold text-slate-800">Kriteria Keterkaitan:</span>
 
-                <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer p-2 rounded-lg hover:bg-slate-50 border border-slate-200">
-                  <input
-                    type="checkbox"
-                    checked={editingItem.terkaitTujuanRpjmd === 1}
-                    onChange={e => setEditingItem({ ...editingItem, terkaitTujuanRpjmd: e.target.checked ? 1 : 0 })}
-                    className="rounded text-purple-600 w-4 h-4"
-                  />
-                  <span>Terkait langsung Tujuan & Sasaran RPJMD</span>
-                </label>
+                <div className="p-2.5 rounded-xl border border-slate-200 bg-white space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-xs text-slate-800">1. Terkait langsung Tujuan & Sasaran RPJMD</span>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      editingItem.terkaitTujuanRpjmd === 1 ? 'bg-emerald-100 text-emerald-800' : editingItem.terkaitTujuanRpjmd === 0 ? 'bg-slate-100 text-slate-600' : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      {editingItem.terkaitTujuanRpjmd === 1 ? 'Ya (1)' : editingItem.terkaitTujuanRpjmd === 0 ? 'Tidak (0)' : 'Belum Diisi'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, terkaitTujuanRpjmd: -1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.terkaitTujuanRpjmd === -1 ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Belum Diisi
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, terkaitTujuanRpjmd: 1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.terkaitTujuanRpjmd === 1 ? 'bg-purple-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Ya (1)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, terkaitTujuanRpjmd: 0 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.terkaitTujuanRpjmd === 0 ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Tidak (0)
+                    </button>
+                  </div>
+                </div>
 
-                <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer p-2 rounded-lg hover:bg-slate-50 border border-slate-200">
-                  <input
-                    type="checkbox"
-                    checked={editingItem.mendukungRpjmn === 1}
-                    onChange={e => setEditingItem({ ...editingItem, mendukungRpjmn: e.target.checked ? 1 : 0 })}
-                    className="rounded text-purple-600 w-4 h-4"
-                  />
-                  <span>Mendukung Prioritas Nasional (RPJMN)</span>
-                </label>
+                <div className="p-2.5 rounded-xl border border-slate-200 bg-white space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-xs text-slate-800">2. Mendukung Prioritas Nasional (RPJMN)</span>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      editingItem.mendukungRpjmn === 1 ? 'bg-emerald-100 text-emerald-800' : editingItem.mendukungRpjmn === 0 ? 'bg-slate-100 text-slate-600' : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      {editingItem.mendukungRpjmn === 1 ? 'Ya (1)' : editingItem.mendukungRpjmn === 0 ? 'Tidak (0)' : 'Belum Diisi'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, mendukungRpjmn: -1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.mendukungRpjmn === -1 ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Belum Diisi
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, mendukungRpjmn: 1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.mendukungRpjmn === 1 ? 'bg-purple-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Ya (1)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, mendukungRpjmn: 0 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.mendukungRpjmn === 0 ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Tidak (0)
+                    </button>
+                  </div>
+                </div>
 
-                <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer p-2 rounded-lg hover:bg-slate-50 border border-slate-200">
-                  <input
-                    type="checkbox"
-                    checked={editingItem.sektorUnggulan === 1}
-                    onChange={e => setEditingItem({ ...editingItem, sektorUnggulan: e.target.checked ? 1 : 0 })}
-                    className="rounded text-purple-600 w-4 h-4"
-                  />
-                  <span>Termasuk Sektor Unggulan Daerah</span>
-                </label>
+                <div className="p-2.5 rounded-xl border border-slate-200 bg-white space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-xs text-slate-800">3. Termasuk Sektor Unggulan Daerah</span>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      editingItem.sektorUnggulan === 1 ? 'bg-emerald-100 text-emerald-800' : editingItem.sektorUnggulan === 0 ? 'bg-slate-100 text-slate-600' : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      {editingItem.sektorUnggulan === 1 ? 'Ya (1)' : editingItem.sektorUnggulan === 0 ? 'Tidak (0)' : 'Belum Diisi'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, sektorUnggulan: -1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.sektorUnggulan === -1 ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Belum Diisi
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, sektorUnggulan: 1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.sektorUnggulan === 1 ? 'bg-purple-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Ya (1)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, sektorUnggulan: 0 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.sektorUnggulan === 0 ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Tidak (0)
+                    </button>
+                  </div>
+                </div>
 
                 {/* Preview Nilai & Skala */}
                 <div className="bg-purple-50 p-2.5 rounded-lg border border-purple-200 flex items-center justify-between text-xs mt-2">
                   <span className="text-purple-900 font-medium">Hasil Skala Risiko Baru:</span>
                   <div className="flex items-center gap-2">
-                    <span className="font-bold text-purple-900">
-                      Nilai: {editingItem.terkaitTujuanRpjmd + editingItem.mendukungRpjmn + editingItem.sektorUnggulan}/3
-                    </span>
-                    <span className="px-2 py-0.5 bg-purple-200 text-purple-900 font-extrabold rounded">
-                      Skala {calculateSkala(editingItem.terkaitTujuanRpjmd + editingItem.mendukungRpjmn + editingItem.sektorUnggulan)}
-                    </span>
+                    {editingItem.terkaitTujuanRpjmd !== -1 && editingItem.mendukungRpjmn !== -1 && editingItem.sektorUnggulan !== -1 ? (
+                      <>
+                        <span className="font-bold text-purple-900">
+                          Nilai: {editingItem.terkaitTujuanRpjmd + editingItem.mendukungRpjmn + editingItem.sektorUnggulan}/3
+                        </span>
+                        <span className="px-2 py-0.5 bg-purple-200 text-purple-900 font-extrabold rounded">
+                          Skala {calculateSkala(editingItem.terkaitTujuanRpjmd + editingItem.mendukungRpjmn + editingItem.sektorUnggulan)}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="px-2 py-0.5 bg-amber-100 text-amber-800 font-bold rounded border border-amber-300">
+                        Belum Lengkap (Skor Belum Muncul)
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
