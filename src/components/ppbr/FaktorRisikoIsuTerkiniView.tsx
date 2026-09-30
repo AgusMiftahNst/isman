@@ -91,6 +91,7 @@ const getMenu1ProgramsList = (): Menu1ProgramItem[] => {
 };
 
 const calculateSkalaStatic = (val: number): number => {
+  if (val < 0) return 0;
   if (val === 4) return 5;
   if (val === 3) return 4;
   if (val === 2) return 3;
@@ -98,7 +99,22 @@ const calculateSkalaStatic = (val: number): number => {
   return 1;
 };
 
-export const FaktorRisikoIsuTerkiniView: React.FC = () => {
+export interface FaktorRisikoIsuTerkiniViewProps {
+  isAdmin?: boolean;
+}
+
+export const FaktorRisikoIsuTerkiniView: React.FC<FaktorRisikoIsuTerkiniViewProps> = ({ isAdmin: isAdminProp }) => {
+  const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
+    try {
+      const saved = localStorage.getItem('isman_user');
+      if (saved) {
+        const u = JSON.parse(saved);
+        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.role === 'Operator' || u.role === 'Inspektur' || u.username?.toLowerCase() === 'admin' || u.username?.toLowerCase() === 'inspektur';
+      }
+    } catch (_) {}
+    return true;
+  })();
+
   // Inisialisasi data: Jika belum ada di localStorage, otomatis ambil dari Program RPJMD & OPD di Menu 1
   const [data, setData] = useState<FaktorRisikoIsuTerkiniItem[]>(() => {
     const saved = localStorage.getItem('ppbr_faktor_isu_terkini');
@@ -111,28 +127,21 @@ export const FaktorRisikoIsuTerkiniView: React.FC = () => {
       }
     }
 
-    // Auto-populate dari Program RPJMD dan OPD Menu 1
+    // Auto-populate dari Program RPJMD dan OPD Menu 1 dengan kriteria awal Belum Diisi (-1)
     const menu1List = getMenu1ProgramsList();
     if (menu1List.length > 0) {
-      return menu1List.map((item, idx) => {
-        const sorotanMasyarakat: 0 | 1 = 1;
-        const isuNasional: 0 | 1 = 1;
-        const layananPublik: 0 | 1 = 1;
-        const hajatHidup: 0 | 1 = 1;
-        const totalNilai = sorotanMasyarakat + isuNasional + layananPublik + hajatHidup;
-        return {
-          id: `fit-${idx + 1}-${Date.now()}`,
-          no: idx + 1,
-          program: item.programRpjmd,
-          namaOPD: item.opdPengampu || '',
-          sorotanMasyarakat,
-          isuNasional,
-          layananPublik,
-          hajatHidup,
-          nilai: totalNilai,
-          skala: calculateSkalaStatic(totalNilai)
-        };
-      });
+      return menu1List.map((item, idx) => ({
+        id: `fit-${idx + 1}-${Date.now()}`,
+        no: idx + 1,
+        program: item.programRpjmd,
+        namaOPD: item.opdPengampu || '',
+        sorotanMasyarakat: -1,
+        isuNasional: -1,
+        layananPublik: -1,
+        hajatHidup: -1,
+        nilai: -1,
+        skala: 0
+      }));
     }
 
     return INITIAL_ISU_TERKINI;
@@ -205,10 +214,10 @@ export const FaktorRisikoIsuTerkiniView: React.FC = () => {
       setNewItem({
         program: '',
         namaOPD: '',
-        sorotanMasyarakat: 1,
-        isuNasional: 1,
-        layananPublik: 1,
-        hajatHidup: 1
+        sorotanMasyarakat: -1,
+        isuNasional: -1,
+        layananPublik: -1,
+        hajatHidup: -1
       });
       return;
     }
@@ -218,10 +227,10 @@ export const FaktorRisikoIsuTerkiniView: React.FC = () => {
       setNewItem({
         program: found.programRpjmd,
         namaOPD: found.opdPengampu || '',
-        sorotanMasyarakat: 1,
-        isuNasional: 1,
-        layananPublik: 1,
-        hajatHidup: 1
+        sorotanMasyarakat: -1,
+        isuNasional: -1,
+        layananPublik: -1,
+        hajatHidup: -1
       });
     }
   };
@@ -232,10 +241,10 @@ export const FaktorRisikoIsuTerkiniView: React.FC = () => {
     setNewItem({
       program: '',
       namaOPD: '',
-      sorotanMasyarakat: 1,
-      isuNasional: 1,
-      layananPublik: 1,
-      hajatHidup: 1
+      sorotanMasyarakat: -1,
+      isuNasional: -1,
+      layananPublik: -1,
+      hajatHidup: -1
     });
     setShowAddModal(true);
   };
@@ -243,13 +252,29 @@ export const FaktorRisikoIsuTerkiniView: React.FC = () => {
   const handleToggleCriteria = (id: string, field: 'sorotanMasyarakat' | 'isuNasional' | 'layananPublik' | 'hajatHidup') => {
     const updated = data.map(item => {
       if (item.id === id) {
-        const newVal = (item[field] === 1 ? 0 : 1) as 0 | 1;
+        // Siklus tri-state: -1 (Belum Diisi) -> 1 (Ya) -> 0 (Tidak) -> -1 (Belum Diisi)
+        const cur = item[field];
+        let newVal: 0 | 1 | -1 = 1;
+        if (cur === 1) {
+          newVal = 0;
+        } else if (cur === 0) {
+          newVal = -1;
+        } else {
+          newVal = 1;
+        }
+
         const updatedItem = { ...item, [field]: newVal };
-        const totalNilai = updatedItem.sorotanMasyarakat + updatedItem.isuNasional + updatedItem.layananPublik + updatedItem.hajatHidup;
+        const isComplete = updatedItem.sorotanMasyarakat !== -1 && 
+                           updatedItem.isuNasional !== -1 && 
+                           updatedItem.layananPublik !== -1 && 
+                           updatedItem.hajatHidup !== -1;
+        const totalNilai = isComplete 
+          ? (updatedItem.sorotanMasyarakat + updatedItem.isuNasional + updatedItem.layananPublik + updatedItem.hajatHidup) 
+          : -1;
         return {
           ...updatedItem,
           nilai: totalNilai,
-          skala: calculateSkala(totalNilai)
+          skala: isComplete ? calculateSkala(totalNilai) : 0
         };
       }
       return item;
@@ -261,7 +286,15 @@ export const FaktorRisikoIsuTerkiniView: React.FC = () => {
     e.preventDefault();
     if (!newItem.program.trim()) return;
 
-    const totalNilai = newItem.sorotanMasyarakat + newItem.isuNasional + newItem.layananPublik + newItem.hajatHidup;
+    const isComplete = newItem.sorotanMasyarakat !== -1 && 
+                       newItem.isuNasional !== -1 && 
+                       newItem.layananPublik !== -1 && 
+                       newItem.hajatHidup !== -1;
+
+    const totalNilai = isComplete 
+      ? (newItem.sorotanMasyarakat + newItem.isuNasional + newItem.layananPublik + newItem.hajatHidup)
+      : -1;
+
     const item: FaktorRisikoIsuTerkiniItem = {
       id: `fit-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       no: data.length + 1,
@@ -272,12 +305,12 @@ export const FaktorRisikoIsuTerkiniView: React.FC = () => {
       layananPublik: newItem.layananPublik,
       hajatHidup: newItem.hajatHidup,
       nilai: totalNilai,
-      skala: calculateSkala(totalNilai)
+      skala: isComplete ? calculateSkala(totalNilai) : 0
     };
     const updated = [...data, item];
     handleSaveData(updated);
     setShowAddModal(false);
-    setNewItem({ program: '', namaOPD: '', sorotanMasyarakat: 1, isuNasional: 1, layananPublik: 1, hajatHidup: 1 });
+    setNewItem({ program: '', namaOPD: '', sorotanMasyarakat: -1, isuNasional: -1, layananPublik: -1, hajatHidup: -1 });
   };
 
   const handleOpenEdit = (item: FaktorRisikoIsuTerkiniItem) => {
@@ -288,13 +321,22 @@ export const FaktorRisikoIsuTerkiniView: React.FC = () => {
   const handleSaveEdit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingItem) return;
-    const totalNilai = editingItem.sorotanMasyarakat + editingItem.isuNasional + editingItem.layananPublik + editingItem.hajatHidup;
+
+    const isComplete = editingItem.sorotanMasyarakat !== -1 && 
+                       editingItem.isuNasional !== -1 && 
+                       editingItem.layananPublik !== -1 && 
+                       editingItem.hajatHidup !== -1;
+
+    const totalNilai = isComplete 
+      ? (editingItem.sorotanMasyarakat + editingItem.isuNasional + editingItem.layananPublik + editingItem.hajatHidup)
+      : -1;
+
     const updatedItem: FaktorRisikoIsuTerkiniItem = {
       ...editingItem,
       program: editingItem.program.trim(),
       namaOPD: editingItem.namaOPD.trim(),
       nilai: totalNilai,
-      skala: calculateSkala(totalNilai)
+      skala: isComplete ? calculateSkala(totalNilai) : 0
     };
     const updated = data.map(d => d.id === updatedItem.id ? updatedItem : d);
     handleSaveData(updated);
@@ -346,20 +388,20 @@ export const FaktorRisikoIsuTerkiniView: React.FC = () => {
   const requestResetAllPenilaian = () => {
     setConfirmModal({
       isOpen: true,
-      title: 'Hapus Seluruh Penilaian Isu Terkini & Dampak Sosial?',
-      message: `Apakah Anda yakin ingin menghapus/mereset penilaian untuk seluruh program (${data.length} program)?`,
-      detail: 'Seluruh checklist sorotan masyarakat, isu nasional, layanan publik, dan hajat hidup orang banyak akan di-reset menjadi 0 (Skala 1). Nama program dan OPD tetap aman di tabel.',
+      title: 'Reset Seluruh Penilaian Isu Terkini?',
+      message: `Apakah Anda yakin ingin mereset penilaian untuk seluruh program (${data.length} program)?`,
+      detail: 'Seluruh checklist kriteria sorotan masyarakat, isu nasional, layanan publik, dan hajat hidup orang banyak akan di-reset menjadi status "Belum Diisi" (-1) sehingga evaluator harus menilai ulang secara nyata. Nama program dan OPD tetap aman di tabel.',
       confirmText: 'Ya, Reset Semua Penilaian',
       variant: 'warning',
       onConfirm: () => {
         const updated = data.map(d => ({
           ...d,
-          sorotanMasyarakat: 0 as const,
-          isuNasional: 0 as const,
-          layananPublik: 0 as const,
-          hajatHidup: 0 as const,
-          nilai: 0,
-          skala: 1
+          sorotanMasyarakat: -1 as const,
+          isuNasional: -1 as const,
+          layananPublik: -1 as const,
+          hajatHidup: -1 as const,
+          nilai: -1,
+          skala: 0
         }));
         handleSaveData(updated);
       }
@@ -395,10 +437,10 @@ export const FaktorRisikoIsuTerkiniView: React.FC = () => {
         const synced: FaktorRisikoIsuTerkiniItem[] = menu1List.map((item, idx) => {
           const matchExisting = existingMap.get(item.programRpjmd.toLowerCase().trim());
           
-          let sorotanMasyarakat: 0 | 1 = 1;
-          let isuNasional: 0 | 1 = 1;
-          let layananPublik: 0 | 1 = 1;
-          let hajatHidup: 0 | 1 = 1;
+          let sorotanMasyarakat: 0 | 1 | -1 = 1;
+          let isuNasional: 0 | 1 | -1 = 1;
+          let layananPublik: 0 | 1 | -1 = 1;
+          let hajatHidup: 0 | 1 | -1 = 1;
 
           if (matchExisting) {
             sorotanMasyarakat = matchExisting.sorotanMasyarakat;
@@ -407,7 +449,14 @@ export const FaktorRisikoIsuTerkiniView: React.FC = () => {
             hajatHidup = matchExisting.hajatHidup;
           }
 
-          const totalNilai = sorotanMasyarakat + isuNasional + layananPublik + hajatHidup;
+          const isComplete = sorotanMasyarakat !== -1 && 
+                             isuNasional !== -1 && 
+                             layananPublik !== -1 && 
+                             hajatHidup !== -1;
+
+          const totalNilai = isComplete 
+            ? (sorotanMasyarakat + isuNasional + layananPublik + hajatHidup)
+            : -1;
 
           return {
             id: matchExisting?.id || `fit-sync-${idx + 1}-${Date.now()}`,
@@ -419,7 +468,7 @@ export const FaktorRisikoIsuTerkiniView: React.FC = () => {
             layananPublik,
             hajatHidup,
             nilai: totalNilai,
-            skala: calculateSkala(totalNilai)
+            skala: isComplete ? calculateSkala(totalNilai) : 0
           };
         });
 
@@ -639,7 +688,7 @@ export const FaktorRisikoIsuTerkiniView: React.FC = () => {
               <Plus className="w-4 h-4" />
               <span>Tambah Data</span>
             </button>
-            {data.length > 0 && (
+            {isAdmin && data.length > 0 && (
               <button
                 onClick={requestResetAllPenilaian}
                 className="px-3 py-2 bg-slate-800 hover:bg-orange-900/60 text-slate-300 hover:text-orange-200 border border-slate-700 rounded-xl text-xs font-medium flex items-center gap-1.5 transition"
@@ -833,17 +882,23 @@ export const FaktorRisikoIsuTerkiniView: React.FC = () => {
                         className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
                           item.sorotanMasyarakat === 1
                             ? 'bg-orange-100 text-orange-800 border border-orange-300 hover:bg-orange-200'
-                            : 'bg-slate-100 text-slate-400 border border-slate-200 hover:bg-slate-200'
+                            : item.sorotanMasyarakat === 0
+                            ? 'bg-slate-100 text-slate-500 border border-slate-300 hover:bg-slate-200'
+                            : 'bg-amber-50 text-amber-800 border border-dashed border-amber-300 hover:bg-amber-100'
                         }`}
-                        title="Klik untuk mengubah status Sorotan Publik"
+                        title="Klik untuk mengubah: Belum Diisi -> Ya -> Tidak -> Belum Diisi"
                       >
                         {item.sorotanMasyarakat === 1 ? (
                           <>
                             <CheckCircle2 className="w-3.5 h-3.5 text-orange-600" /> Ya (1)
                           </>
-                        ) : (
+                        ) : item.sorotanMasyarakat === 0 ? (
                           <>
                             <XCircle className="w-3.5 h-3.5 text-slate-400" /> Tidak (0)
+                          </>
+                        ) : (
+                          <>
+                            <AlertCircle className="w-3.5 h-3.5 text-amber-500" /> Belum Diisi (-)
                           </>
                         )}
                       </button>
@@ -856,17 +911,23 @@ export const FaktorRisikoIsuTerkiniView: React.FC = () => {
                         className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
                           item.isuNasional === 1
                             ? 'bg-orange-100 text-orange-800 border border-orange-300 hover:bg-orange-200'
-                            : 'bg-slate-100 text-slate-400 border border-slate-200 hover:bg-slate-200'
+                            : item.isuNasional === 0
+                            ? 'bg-slate-100 text-slate-500 border border-slate-300 hover:bg-slate-200'
+                            : 'bg-amber-50 text-amber-800 border border-dashed border-amber-300 hover:bg-amber-100'
                         }`}
-                        title="Klik untuk mengubah status Isu Nasional"
+                        title="Klik untuk mengubah: Belum Diisi -> Ya -> Tidak -> Belum Diisi"
                       >
                         {item.isuNasional === 1 ? (
                           <>
                             <CheckCircle2 className="w-3.5 h-3.5 text-orange-600" /> Ya (1)
                           </>
-                        ) : (
+                        ) : item.isuNasional === 0 ? (
                           <>
                             <XCircle className="w-3.5 h-3.5 text-slate-400" /> Tidak (0)
+                          </>
+                        ) : (
+                          <>
+                            <AlertCircle className="w-3.5 h-3.5 text-amber-500" /> Belum Diisi (-)
                           </>
                         )}
                       </button>
@@ -879,17 +940,23 @@ export const FaktorRisikoIsuTerkiniView: React.FC = () => {
                         className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
                           item.layananPublik === 1
                             ? 'bg-cyan-100 text-cyan-800 border border-cyan-300 hover:bg-cyan-200'
-                            : 'bg-slate-100 text-slate-400 border border-slate-200 hover:bg-slate-200'
+                            : item.layananPublik === 0
+                            ? 'bg-slate-100 text-slate-500 border border-slate-300 hover:bg-slate-200'
+                            : 'bg-amber-50 text-amber-800 border border-dashed border-amber-300 hover:bg-amber-100'
                         }`}
-                        title="Klik untuk mengubah status Layanan Publik"
+                        title="Klik untuk mengubah: Belum Diisi -> Ya -> Tidak -> Belum Diisi"
                       >
                         {item.layananPublik === 1 ? (
                           <>
                             <CheckCircle2 className="w-3.5 h-3.5 text-cyan-600" /> Ya (1)
                           </>
-                        ) : (
+                        ) : item.layananPublik === 0 ? (
                           <>
                             <XCircle className="w-3.5 h-3.5 text-slate-400" /> Tidak (0)
+                          </>
+                        ) : (
+                          <>
+                            <AlertCircle className="w-3.5 h-3.5 text-amber-500" /> Belum Diisi (-)
                           </>
                         )}
                       </button>
@@ -902,17 +969,23 @@ export const FaktorRisikoIsuTerkiniView: React.FC = () => {
                         className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
                           item.hajatHidup === 1
                             ? 'bg-purple-100 text-purple-800 border border-purple-300 hover:bg-purple-200'
-                            : 'bg-slate-100 text-slate-400 border border-slate-200 hover:bg-slate-200'
+                            : item.hajatHidup === 0
+                            ? 'bg-slate-100 text-slate-500 border border-slate-300 hover:bg-slate-200'
+                            : 'bg-amber-50 text-amber-800 border border-dashed border-amber-300 hover:bg-amber-100'
                         }`}
-                        title="Klik untuk mengubah status Hajat Hidup"
+                        title="Klik untuk mengubah: Belum Diisi -> Ya -> Tidak -> Belum Diisi"
                       >
                         {item.hajatHidup === 1 ? (
                           <>
                             <CheckCircle2 className="w-3.5 h-3.5 text-purple-600" /> Ya (1)
                           </>
-                        ) : (
+                        ) : item.hajatHidup === 0 ? (
                           <>
                             <XCircle className="w-3.5 h-3.5 text-slate-400" /> Tidak (0)
+                          </>
+                        ) : (
+                          <>
+                            <AlertCircle className="w-3.5 h-3.5 text-amber-500" /> Belum Diisi (-)
                           </>
                         )}
                       </button>
@@ -920,20 +993,30 @@ export const FaktorRisikoIsuTerkiniView: React.FC = () => {
 
                     {/* Total Skor */}
                     <td className="p-3 text-center font-extrabold text-orange-900 bg-orange-50/40 text-sm">
-                      {item.nilai} / 4
+                      {item.nilai >= 0 && item.sorotanMasyarakat !== -1 && item.isuNasional !== -1 && item.layananPublik !== -1 && item.hajatHidup !== -1 ? (
+                        `${item.nilai} / 4`
+                      ) : (
+                        <span className="text-slate-400 italic font-semibold text-xs">-</span>
+                      )}
                     </td>
 
                     {/* Skala Risiko */}
                     <td className="p-3 text-center">
-                      <span className={`inline-block px-3 py-1 rounded-full text-xs font-extrabold ${
-                        item.skala >= 4
-                          ? 'bg-rose-100 text-rose-800 border border-rose-300'
-                          : item.skala === 3
-                          ? 'bg-amber-100 text-amber-800 border border-amber-300'
-                          : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                      }`}>
-                        Skala {item.skala}
-                      </span>
+                      {item.skala > 0 && item.nilai >= 0 && item.sorotanMasyarakat !== -1 && item.isuNasional !== -1 && item.layananPublik !== -1 && item.hajatHidup !== -1 ? (
+                        <span className={`inline-block px-3 py-1 rounded-full text-xs font-extrabold ${
+                          item.skala >= 4
+                            ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                            : item.skala === 3
+                            ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                            : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                        }`}>
+                          Skala {item.skala}
+                        </span>
+                      ) : (
+                        <span className="inline-block px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                          Belum Dinilai
+                        </span>
+                      )}
                     </td>
 
                     {/* Aksi */}
@@ -1068,72 +1151,204 @@ export const FaktorRisikoIsuTerkiniView: React.FC = () => {
                 )}
               </div>
 
-              {/* Kriteria Checklist */}
+              {/* Kriteria Checklist / Tri-State */}
               <div className="space-y-2 pt-2 border-t border-slate-100">
                 <span className="block text-xs font-bold text-slate-800">Indikator Kriteria Isu & Dampak Sosial:</span>
 
-                <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer p-2 rounded-lg hover:bg-slate-50 border border-slate-200">
-                  <input
-                    type="checkbox"
-                    checked={newItem.sorotanMasyarakat === 1}
-                    onChange={e => setNewItem({ ...newItem, sorotanMasyarakat: e.target.checked ? 1 : 0 })}
-                    className="rounded text-orange-600 w-4 h-4"
-                  />
-                  <div>
-                    <span className="font-semibold block">Mendapat Sorotan Publik / Media Massa</span>
-                    <span className="text-[11px] text-slate-500">Terdapat keluhan publik, pengaduan SP4N-LAPOR, atau liputan pers</span>
+                {/* Kriteria 1 */}
+                <div className="p-2.5 rounded-xl border border-slate-200 bg-white space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="font-semibold text-xs text-slate-800 block">1. Mendapat Sorotan Publik / Media Massa</span>
+                      <span className="text-[11px] text-slate-500">Keluhan publik, pengaduan SP4N-LAPOR, liputan pers</span>
+                    </div>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      newItem.sorotanMasyarakat === 1 ? 'bg-orange-100 text-orange-800' : newItem.sorotanMasyarakat === 0 ? 'bg-slate-100 text-slate-600' : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      {newItem.sorotanMasyarakat === 1 ? 'Ya (1)' : newItem.sorotanMasyarakat === 0 ? 'Tidak (0)' : 'Belum Diisi'}
+                    </span>
                   </div>
-                </label>
+                  <div className="flex items-center gap-1.5 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, sorotanMasyarakat: -1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.sorotanMasyarakat === -1 ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Belum Diisi
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, sorotanMasyarakat: 1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.sorotanMasyarakat === 1 ? 'bg-orange-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Ya (1)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, sorotanMasyarakat: 0 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.sorotanMasyarakat === 0 ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Tidak (0)
+                    </button>
+                  </div>
+                </div>
 
-                <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer p-2 rounded-lg hover:bg-slate-50 border border-slate-200">
-                  <input
-                    type="checkbox"
-                    checked={newItem.isuNasional === 1}
-                    onChange={e => setNewItem({ ...newItem, isuNasional: e.target.checked ? 1 : 0 })}
-                    className="rounded text-orange-600 w-4 h-4"
-                  />
-                  <div>
-                    <span className="font-semibold block">Terkait Isu Prioritas Nasional / Stranas PK</span>
-                    <span className="text-[11px] text-slate-500">Program penurunan stunting, kemiskinan, inflasi daerah, P3DN</span>
+                {/* Kriteria 2 */}
+                <div className="p-2.5 rounded-xl border border-slate-200 bg-white space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="font-semibold text-xs text-slate-800 block">2. Terkait Isu Prioritas Nasional / Stranas PK</span>
+                      <span className="text-[11px] text-slate-500">Stunting, kemiskinan ekstrem, inflasi daerah, P3DN</span>
+                    </div>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      newItem.isuNasional === 1 ? 'bg-orange-100 text-orange-800' : newItem.isuNasional === 0 ? 'bg-slate-100 text-slate-600' : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      {newItem.isuNasional === 1 ? 'Ya (1)' : newItem.isuNasional === 0 ? 'Tidak (0)' : 'Belum Diisi'}
+                    </span>
                   </div>
-                </label>
+                  <div className="flex items-center gap-1.5 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, isuNasional: -1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.isuNasional === -1 ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Belum Diisi
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, isuNasional: 1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.isuNasional === 1 ? 'bg-orange-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Ya (1)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, isuNasional: 0 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.isuNasional === 0 ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Tidak (0)
+                    </button>
+                  </div>
+                </div>
 
-                <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer p-2 rounded-lg hover:bg-slate-50 border border-slate-200">
-                  <input
-                    type="checkbox"
-                    checked={newItem.layananPublik === 1}
-                    onChange={e => setNewItem({ ...newItem, layananPublik: e.target.checked ? 1 : 0 })}
-                    className="rounded text-cyan-600 w-4 h-4"
-                  />
-                  <div>
-                    <span className="font-semibold block">Pelayanan Publik Dasar (SPM)</span>
-                    <span className="text-[11px] text-slate-500">Bidang kesehatan, pendidikan, sosial, PU, atau perumahan rakyat</span>
+                {/* Kriteria 3 */}
+                <div className="p-2.5 rounded-xl border border-slate-200 bg-white space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="font-semibold text-xs text-slate-800 block">3. Pelayanan Publik Dasar (SPM)</span>
+                      <span className="text-[11px] text-slate-500">Kesehatan, pendidikan, sosial, PU, perumahan rakyat</span>
+                    </div>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      newItem.layananPublik === 1 ? 'bg-cyan-100 text-cyan-800' : newItem.layananPublik === 0 ? 'bg-slate-100 text-slate-600' : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      {newItem.layananPublik === 1 ? 'Ya (1)' : newItem.layananPublik === 0 ? 'Tidak (0)' : 'Belum Diisi'}
+                    </span>
                   </div>
-                </label>
+                  <div className="flex items-center gap-1.5 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, layananPublik: -1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.layananPublik === -1 ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Belum Diisi
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, layananPublik: 1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.layananPublik === 1 ? 'bg-cyan-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Ya (1)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, layananPublik: 0 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.layananPublik === 0 ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Tidak (0)
+                    </button>
+                  </div>
+                </div>
 
-                <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer p-2 rounded-lg hover:bg-slate-50 border border-slate-200">
-                  <input
-                    type="checkbox"
-                    checked={newItem.hajatHidup === 1}
-                    onChange={e => setNewItem({ ...newItem, hajatHidup: e.target.checked ? 1 : 0 })}
-                    className="rounded text-purple-600 w-4 h-4"
-                  />
-                  <div>
-                    <span className="font-semibold block">Menyangkut Hajat Hidup Orang Banyak</span>
-                    <span className="text-[11px] text-slate-500">Dampak luas pada keselamatan, kebutuhan air bersih, pangan, ketertiban</span>
+                {/* Kriteria 4 */}
+                <div className="p-2.5 rounded-xl border border-slate-200 bg-white space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="font-semibold text-xs text-slate-800 block">4. Menyangkut Hajat Hidup Orang Banyak</span>
+                      <span className="text-[11px] text-slate-500">Keselamatan, kebutuhan air bersih, pangan, ketertiban</span>
+                    </div>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      newItem.hajatHidup === 1 ? 'bg-purple-100 text-purple-800' : newItem.hajatHidup === 0 ? 'bg-slate-100 text-slate-600' : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      {newItem.hajatHidup === 1 ? 'Ya (1)' : newItem.hajatHidup === 0 ? 'Tidak (0)' : 'Belum Diisi'}
+                    </span>
                   </div>
-                </label>
+                  <div className="flex items-center gap-1.5 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, hajatHidup: -1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.hajatHidup === -1 ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Belum Diisi
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, hajatHidup: 1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.hajatHidup === 1 ? 'bg-purple-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Ya (1)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewItem({ ...newItem, hajatHidup: 0 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        newItem.hajatHidup === 0 ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Tidak (0)
+                    </button>
+                  </div>
+                </div>
 
                 {/* Preview Nilai & Skala */}
                 <div className="bg-orange-50 p-2.5 rounded-lg border border-orange-200 flex items-center justify-between text-xs mt-2">
                   <span className="text-orange-900 font-medium">Hasil Penilaian Awal:</span>
                   <div className="flex items-center gap-2">
-                    <span className="font-bold text-orange-900">
-                      Skor: {newItem.sorotanMasyarakat + newItem.isuNasional + newItem.layananPublik + newItem.hajatHidup}/4
-                    </span>
-                    <span className="px-2 py-0.5 bg-orange-200 text-orange-900 font-extrabold rounded">
-                      Skala {calculateSkala(newItem.sorotanMasyarakat + newItem.isuNasional + newItem.layananPublik + newItem.hajatHidup)}
-                    </span>
+                    {newItem.sorotanMasyarakat !== -1 && newItem.isuNasional !== -1 && newItem.layananPublik !== -1 && newItem.hajatHidup !== -1 ? (
+                      <>
+                        <span className="font-bold text-orange-900">
+                          Skor: {newItem.sorotanMasyarakat + newItem.isuNasional + newItem.layananPublik + newItem.hajatHidup}/4
+                        </span>
+                        <span className="px-2 py-0.5 bg-orange-200 text-orange-900 font-extrabold rounded">
+                          Skala {calculateSkala(newItem.sorotanMasyarakat + newItem.isuNasional + newItem.layananPublik + newItem.hajatHidup)}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="px-2 py-0.5 bg-amber-100 text-amber-800 font-bold rounded border border-amber-300">
+                        Belum Lengkap (Skor Belum Muncul)
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1207,71 +1422,204 @@ export const FaktorRisikoIsuTerkiniView: React.FC = () => {
                 </div>
               </div>
 
+              {/* Kriteria Checklist / Tri-State Edit */}
               <div className="space-y-2 pt-2 border-t border-slate-100">
                 <span className="block text-xs font-bold text-slate-800">Indikator Kriteria:</span>
 
-                <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer p-2 rounded-lg hover:bg-slate-50 border border-slate-200">
-                  <input
-                    type="checkbox"
-                    checked={editingItem.sorotanMasyarakat === 1}
-                    onChange={e => setEditingItem({ ...editingItem, sorotanMasyarakat: e.target.checked ? 1 : 0 })}
-                    className="rounded text-orange-600 w-4 h-4"
-                  />
-                  <div>
-                    <span className="font-semibold block">Mendapat Sorotan Publik / Media Massa</span>
-                    <span className="text-[11px] text-slate-500">Terdapat keluhan publik, pengaduan SP4N-LAPOR, atau liputan pers</span>
+                {/* Kriteria 1 */}
+                <div className="p-2.5 rounded-xl border border-slate-200 bg-white space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="font-semibold text-xs text-slate-800 block">1. Mendapat Sorotan Publik / Media Massa</span>
+                      <span className="text-[11px] text-slate-500">Keluhan publik, pengaduan SP4N-LAPOR, liputan pers</span>
+                    </div>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      editingItem.sorotanMasyarakat === 1 ? 'bg-orange-100 text-orange-800' : editingItem.sorotanMasyarakat === 0 ? 'bg-slate-100 text-slate-600' : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      {editingItem.sorotanMasyarakat === 1 ? 'Ya (1)' : editingItem.sorotanMasyarakat === 0 ? 'Tidak (0)' : 'Belum Diisi'}
+                    </span>
                   </div>
-                </label>
+                  <div className="flex items-center gap-1.5 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, sorotanMasyarakat: -1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.sorotanMasyarakat === -1 ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Belum Diisi
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, sorotanMasyarakat: 1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.sorotanMasyarakat === 1 ? 'bg-orange-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Ya (1)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, sorotanMasyarakat: 0 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.sorotanMasyarakat === 0 ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Tidak (0)
+                    </button>
+                  </div>
+                </div>
 
-                <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer p-2 rounded-lg hover:bg-slate-50 border border-slate-200">
-                  <input
-                    type="checkbox"
-                    checked={editingItem.isuNasional === 1}
-                    onChange={e => setEditingItem({ ...editingItem, isuNasional: e.target.checked ? 1 : 0 })}
-                    className="rounded text-orange-600 w-4 h-4"
-                  />
-                  <div>
-                    <span className="font-semibold block">Terkait Isu Prioritas Nasional / Stranas PK</span>
-                    <span className="text-[11px] text-slate-500">Program penurunan stunting, kemiskinan, inflasi daerah, P3DN</span>
+                {/* Kriteria 2 */}
+                <div className="p-2.5 rounded-xl border border-slate-200 bg-white space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="font-semibold text-xs text-slate-800 block">2. Terkait Isu Prioritas Nasional / Stranas PK</span>
+                      <span className="text-[11px] text-slate-500">Stunting, kemiskinan ekstrem, inflasi daerah, P3DN</span>
+                    </div>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      editingItem.isuNasional === 1 ? 'bg-orange-100 text-orange-800' : editingItem.isuNasional === 0 ? 'bg-slate-100 text-slate-600' : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      {editingItem.isuNasional === 1 ? 'Ya (1)' : editingItem.isuNasional === 0 ? 'Tidak (0)' : 'Belum Diisi'}
+                    </span>
                   </div>
-                </label>
+                  <div className="flex items-center gap-1.5 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, isuNasional: -1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.isuNasional === -1 ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Belum Diisi
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, isuNasional: 1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.isuNasional === 1 ? 'bg-orange-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Ya (1)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, isuNasional: 0 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.isuNasional === 0 ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Tidak (0)
+                    </button>
+                  </div>
+                </div>
 
-                <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer p-2 rounded-lg hover:bg-slate-50 border border-slate-200">
-                  <input
-                    type="checkbox"
-                    checked={editingItem.layananPublik === 1}
-                    onChange={e => setEditingItem({ ...editingItem, layananPublik: e.target.checked ? 1 : 0 })}
-                    className="rounded text-cyan-600 w-4 h-4"
-                  />
-                  <div>
-                    <span className="font-semibold block">Pelayanan Publik Dasar (SPM)</span>
-                    <span className="text-[11px] text-slate-500">Bidang kesehatan, pendidikan, sosial, PU, atau perumahan rakyat</span>
+                {/* Kriteria 3 */}
+                <div className="p-2.5 rounded-xl border border-slate-200 bg-white space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="font-semibold text-xs text-slate-800 block">3. Pelayanan Publik Dasar (SPM)</span>
+                      <span className="text-[11px] text-slate-500">Kesehatan, pendidikan, sosial, PU, perumahan rakyat</span>
+                    </div>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      editingItem.layananPublik === 1 ? 'bg-cyan-100 text-cyan-800' : editingItem.layananPublik === 0 ? 'bg-slate-100 text-slate-600' : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      {editingItem.layananPublik === 1 ? 'Ya (1)' : editingItem.layananPublik === 0 ? 'Tidak (0)' : 'Belum Diisi'}
+                    </span>
                   </div>
-                </label>
+                  <div className="flex items-center gap-1.5 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, layananPublik: -1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.layananPublik === -1 ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Belum Diisi
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, layananPublik: 1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.layananPublik === 1 ? 'bg-cyan-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Ya (1)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, layananPublik: 0 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.layananPublik === 0 ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Tidak (0)
+                    </button>
+                  </div>
+                </div>
 
-                <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer p-2 rounded-lg hover:bg-slate-50 border border-slate-200">
-                  <input
-                    type="checkbox"
-                    checked={editingItem.hajatHidup === 1}
-                    onChange={e => setEditingItem({ ...editingItem, hajatHidup: e.target.checked ? 1 : 0 })}
-                    className="rounded text-purple-600 w-4 h-4"
-                  />
-                  <div>
-                    <span className="font-semibold block">Menyangkut Hajat Hidup Orang Banyak</span>
-                    <span className="text-[11px] text-slate-500">Dampak luas pada keselamatan, kebutuhan air bersih, pangan, ketertiban</span>
+                {/* Kriteria 4 */}
+                <div className="p-2.5 rounded-xl border border-slate-200 bg-white space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="font-semibold text-xs text-slate-800 block">4. Menyangkut Hajat Hidup Orang Banyak</span>
+                      <span className="text-[11px] text-slate-500">Keselamatan, kebutuhan air bersih, pangan, ketertiban</span>
+                    </div>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      editingItem.hajatHidup === 1 ? 'bg-purple-100 text-purple-800' : editingItem.hajatHidup === 0 ? 'bg-slate-100 text-slate-600' : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      {editingItem.hajatHidup === 1 ? 'Ya (1)' : editingItem.hajatHidup === 0 ? 'Tidak (0)' : 'Belum Diisi'}
+                    </span>
                   </div>
-                </label>
+                  <div className="flex items-center gap-1.5 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, hajatHidup: -1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.hajatHidup === -1 ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Belum Diisi
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, hajatHidup: 1 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.hajatHidup === 1 ? 'bg-purple-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Ya (1)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, hajatHidup: 0 })}
+                      className={`flex-1 py-1 rounded-lg text-xs font-bold transition ${
+                        editingItem.hajatHidup === 0 ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Tidak (0)
+                    </button>
+                  </div>
+                </div>
 
                 {/* Preview Hasil Edit */}
                 <div className="bg-orange-50 p-2.5 rounded-lg border border-orange-200 flex items-center justify-between text-xs mt-2">
                   <span className="text-orange-900 font-medium">Hasil Penilaian:</span>
                   <div className="flex items-center gap-2">
-                    <span className="font-bold text-orange-900">
-                      Skor: {editingItem.sorotanMasyarakat + editingItem.isuNasional + editingItem.layananPublik + editingItem.hajatHidup}/4
-                    </span>
-                    <span className="px-2 py-0.5 bg-orange-200 text-orange-900 font-extrabold rounded">
-                      Skala {calculateSkala(editingItem.sorotanMasyarakat + editingItem.isuNasional + editingItem.layananPublik + editingItem.hajatHidup)}
-                    </span>
+                    {editingItem.sorotanMasyarakat !== -1 && editingItem.isuNasional !== -1 && editingItem.layananPublik !== -1 && editingItem.hajatHidup !== -1 ? (
+                      <>
+                        <span className="font-bold text-orange-900">
+                          Skor: {editingItem.sorotanMasyarakat + editingItem.isuNasional + editingItem.layananPublik + editingItem.hajatHidup}/4
+                        </span>
+                        <span className="px-2 py-0.5 bg-orange-200 text-orange-900 font-extrabold rounded">
+                          Skala {calculateSkala(editingItem.sorotanMasyarakat + editingItem.isuNasional + editingItem.layananPublik + editingItem.hajatHidup)}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="px-2 py-0.5 bg-amber-100 text-amber-800 font-bold rounded border border-amber-300">
+                        Belum Lengkap (Skor Belum Muncul)
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
