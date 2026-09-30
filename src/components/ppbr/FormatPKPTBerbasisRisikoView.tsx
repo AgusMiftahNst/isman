@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { FormatPKPTItem } from './ppbrData';
 import { exportToExcel, exportToPdf } from './ppbrExport';
+import { db } from '../../lib/firebase';
+import { doc, onSnapshot, setDoc } from 'firebase/firestore';
 import {
   getMenu11Items,
   getMenu12Items,
@@ -29,6 +31,24 @@ import {
   Layers,
   CheckCircle2
 } from 'lucide-react';
+
+export interface PKPTHeaderInfo {
+  tahun: string;
+  namaInspektur: string;
+  nipInspektur: string;
+  namaBupati: string;
+  jabatanBupati: string;
+  tempatTanggalPengesahan: string;
+}
+
+export const DEFAULT_PKPT_HEADER_INFO: PKPTHeaderInfo = {
+  tahun: '2025',
+  namaInspektur: 'Drs. H. Ahmad Fauzi, M.Si, CGCAE',
+  nipInspektur: '19750812 199903 1 004',
+  namaBupati: 'Dr. Ir. Johanes Rettob, S.Sos, M.M',
+  jabatanBupati: 'Bupati Mimika',
+  tempatTanggalPengesahan: 'Timika,    Januari 2025'
+};
 
 export const FormatPKPTBerbasisRisikoView: React.FC = () => {
   // Hanya membaca data yang sudah tersimpan di localStorage (tidak otomatis overwrite)
@@ -59,13 +79,87 @@ export const FormatPKPTBerbasisRisikoView: React.FC = () => {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [showExcludedModal, setShowExcludedModal] = useState<boolean>(false);
 
-  const [headerInfo, setHeaderInfo] = useState({
-    tahun: '2025',
-    namaInspektur: 'Drs. H. Ahmad Fauzi, M.Si, CGCAE',
-    nipInspektur: '19750812 199903 1 004',
-    namaBupati: 'Dr. Ir. Johanes Rettob, S.Sos, M.M',
-    jabatanBupati: 'Bupati Mimika'
+  // Pengaturan identitas disimpan permanen di localStorage agar tidak kembali ke awal saat pindah menu atau refresh
+  const [headerInfo, setHeaderInfo] = useState<PKPTHeaderInfo>(() => {
+    const saved = localStorage.getItem('ppbr_pkpt_header_info');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') {
+          return {
+            tahun: parsed.tahun ?? DEFAULT_PKPT_HEADER_INFO.tahun,
+            namaInspektur: parsed.namaInspektur ?? DEFAULT_PKPT_HEADER_INFO.namaInspektur,
+            nipInspektur: parsed.nipInspektur ?? DEFAULT_PKPT_HEADER_INFO.nipInspektur,
+            namaBupati: parsed.namaBupati ?? DEFAULT_PKPT_HEADER_INFO.namaBupati,
+            jabatanBupati: parsed.jabatanBupati ?? DEFAULT_PKPT_HEADER_INFO.jabatanBupati,
+            tempatTanggalPengesahan: parsed.tempatTanggalPengesahan ?? DEFAULT_PKPT_HEADER_INFO.tempatTanggalPengesahan
+          };
+        }
+      } catch (e) {
+        console.error('Error parsing ppbr_pkpt_header_info', e);
+      }
+    }
+    return DEFAULT_PKPT_HEADER_INFO;
   });
+
+  const handleUpdateHeaderField = (field: keyof PKPTHeaderInfo, value: string) => {
+    setHeaderInfo(prev => {
+      const next = { ...prev, [field]: value };
+      localStorage.setItem('ppbr_pkpt_header_info', JSON.stringify(next));
+      try {
+        setDoc(doc(db, 'ppbr_data', 'pkpt_header'), next, { merge: true }).catch(() => {});
+      } catch (_) {}
+      return next;
+    });
+  };
+
+  const handleResetHeaderInfo = () => {
+    setHeaderInfo(DEFAULT_PKPT_HEADER_INFO);
+    localStorage.setItem('ppbr_pkpt_header_info', JSON.stringify(DEFAULT_PKPT_HEADER_INFO));
+    try {
+      setDoc(doc(db, 'ppbr_data', 'pkpt_header'), DEFAULT_PKPT_HEADER_INFO, { merge: true }).catch(() => {});
+    } catch (_) {}
+    setToastMessage('Pengaturan identitas berhasil dikembalikan ke default.');
+    setTimeout(() => setToastMessage(null), 3000);
+  };
+
+  // Real-time synchronization with Firestore
+  useEffect(() => {
+    const unsubHeader = onSnapshot(doc(db, 'ppbr_data', 'pkpt_header'), (snap) => {
+      if (snap.exists()) {
+        const d = snap.data() as Partial<PKPTHeaderInfo>;
+        if (d && typeof d === 'object') {
+          setHeaderInfo(prev => {
+            const merged: PKPTHeaderInfo = {
+              tahun: d.tahun ?? prev.tahun,
+              namaInspektur: d.namaInspektur ?? prev.namaInspektur,
+              nipInspektur: d.nipInspektur ?? prev.nipInspektur,
+              namaBupati: d.namaBupati ?? prev.namaBupati,
+              jabatanBupati: d.jabatanBupati ?? prev.jabatanBupati,
+              tempatTanggalPengesahan: d.tempatTanggalPengesahan ?? prev.tempatTanggalPengesahan
+            };
+            localStorage.setItem('ppbr_pkpt_header_info', JSON.stringify(merged));
+            return merged;
+          });
+        }
+      }
+    }, () => {});
+
+    const unsubFinal = onSnapshot(doc(db, 'ppbr_data', 'pkpt_final'), (snap) => {
+      if (snap.exists()) {
+        const snapData = snap.data();
+        if (snapData && Array.isArray(snapData.items) && snapData.items.length > 0) {
+          setData(snapData.items);
+          localStorage.setItem('ppbr_pkpt_final', JSON.stringify(snapData.items));
+        }
+      }
+    }, () => {});
+
+    return () => {
+      unsubHeader();
+      unsubFinal();
+    };
+  }, []);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [activeTab, setActiveTab] = useState<'ALL' | 'PBBR' | 'MANDATORY'>('ALL');
@@ -107,6 +201,9 @@ export const FormatPKPTBerbasisRisikoView: React.FC = () => {
     setSyncMeta(result);
     localStorage.setItem('ppbr_pkpt_final', JSON.stringify(result.items));
     localStorage.setItem('ppbr_pkpt_meta', JSON.stringify(result));
+    try {
+      setDoc(doc(db, 'ppbr_data', 'pkpt_final'), { items: result.items, updatedAt: new Date().toISOString() }, { merge: true }).catch(() => {});
+    } catch (_) {}
 
     setTimeout(() => {
       setIsSyncing(false);
@@ -140,6 +237,9 @@ export const FormatPKPTBerbasisRisikoView: React.FC = () => {
     const updated = data.map(d => (d.id === updatedItem.id ? updatedItem : d));
     setData(updated);
     localStorage.setItem('ppbr_pkpt_final', JSON.stringify(updated));
+    try {
+      setDoc(doc(db, 'ppbr_data', 'pkpt_final'), { items: updated, updatedAt: new Date().toISOString() }, { merge: true }).catch(() => {});
+    } catch (_) {}
     setShowEditModal(false);
     setEditingItem(null);
     setToastMessage('Data penugasan PKPT berhasil diperbarui.');
@@ -201,7 +301,19 @@ export const FormatPKPTBerbasisRisikoView: React.FC = () => {
       `LAMPIRAN 14: FORMAT PROGRAM KERJA PENGAWASAN TAHUNAN (PKPT) BERBASIS RISIKO TAHUN ${headerInfo.tahun}`,
       `Total: ${data.length} Penugasan (PBBR Menu 11: ${countPbbr} | Mandatory Menu 12: ${countMandatory} | Dikecualikan Menu 13: ${countExcluded}) | Total Mandays: ${totalMandays > 0 ? totalMandays + ' Hari' : '-'} | Total Anggaran: ${totalAnggaran > 0 ? 'Rp ' + totalAnggaran.toLocaleString('id-ID') : '-'}`,
       cols,
-      exportData
+      exportData,
+      {
+        kiri: {
+          jabatan: headerInfo.jabatanBupati || 'Bupati Mimika',
+          nama: headerInfo.namaBupati || ''
+        },
+        kanan: {
+          tanggal: headerInfo.tempatTanggalPengesahan || `Timika,    Januari ${headerInfo.tahun}`,
+          jabatan: 'Inspektur Daerah',
+          nama: headerInfo.namaInspektur || '',
+          nip: headerInfo.nipInspektur || ''
+        }
+      }
     );
   };
 
@@ -223,7 +335,20 @@ export const FormatPKPTBerbasisRisikoView: React.FC = () => {
       `LAMPIRAN 14: PROGRAM KERJA PENGAWASAN TAHUNAN (PKPT) BERBASIS RISIKO TAHUN ${headerInfo.tahun}`,
       headers,
       rows,
-      'landscape'
+      'landscape',
+      undefined,
+      {
+        kiri: {
+          jabatan: headerInfo.jabatanBupati || 'Bupati Mimika',
+          nama: headerInfo.namaBupati || ''
+        },
+        kanan: {
+          tanggal: headerInfo.tempatTanggalPengesahan || `Timika,    Januari ${headerInfo.tahun}`,
+          jabatan: 'Inspektur Daerah',
+          nama: headerInfo.namaInspektur || '',
+          nip: headerInfo.nipInspektur || ''
+        }
+      }
     );
   };
 
@@ -628,46 +753,132 @@ export const FormatPKPTBerbasisRisikoView: React.FC = () => {
 
           {/* Form Informasi Penandatangan Dokumen PKPT */}
           <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 mb-3 flex items-center gap-2">
-              <CalendarCheck className="w-4 h-4 text-indigo-600" />
-              Pengaturan Identitas & Pengesahan Dokumen PKPT
-            </h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
               <div>
-                <label className="block text-slate-500 font-medium mb-1">Tahun Anggaran</label>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-2">
+                  <CalendarCheck className="w-4 h-4 text-indigo-600" />
+                  Pengaturan Identitas & Pengesahan Dokumen PKPT
+                </h3>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Pengaturan ini tersimpan otomatis di perangkat Anda sehingga tidak akan hilang saat berpindah menu atau merefresh halaman.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg font-semibold border border-emerald-200 flex items-center gap-1.5 shadow-2xs">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                  Tersimpan Otomatis
+                </span>
+                <button
+                  type="button"
+                  onClick={handleResetHeaderInfo}
+                  className="text-[11px] text-slate-500 hover:text-rose-600 px-2.5 py-1 rounded-lg border border-slate-200 hover:border-rose-200 hover:bg-rose-50 transition"
+                  title="Kembalikan identitas ke default"
+                >
+                  Reset Default
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5 text-xs">
+              <div>
+                <label className="block text-slate-600 font-semibold mb-1">Tahun Anggaran (PKPT)</label>
                 <input
                   type="text"
                   value={headerInfo.tahun}
-                  onChange={e => setHeaderInfo({ ...headerInfo, tahun: e.target.value })}
-                  className="w-full px-3 py-1.5 border border-slate-300 rounded-xl font-bold text-slate-800"
+                  onChange={e => handleUpdateHeaderField('tahun', e.target.value)}
+                  placeholder="2025"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none bg-slate-50/50"
                 />
               </div>
+
               <div>
-                <label className="block text-slate-500 font-medium mb-1">Nama Inspektur Daerah</label>
+                <label className="block text-slate-600 font-semibold mb-1">Tempat & Tanggal Pengesahan</label>
                 <input
                   type="text"
-                  value={headerInfo.namaInspektur}
-                  onChange={e => setHeaderInfo({ ...headerInfo, namaInspektur: e.target.value })}
-                  className="w-full px-3 py-1.5 border border-slate-300 rounded-xl text-slate-800"
+                  value={headerInfo.tempatTanggalPengesahan}
+                  onChange={e => handleUpdateHeaderField('tempatTanggalPengesahan', e.target.value)}
+                  placeholder="Contoh: Timika,    Januari 2025"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none"
                 />
               </div>
+
               <div>
-                <label className="block text-slate-500 font-medium mb-1">Nama Kepala Daerah</label>
-                <input
-                  type="text"
-                  value={headerInfo.namaBupati}
-                  onChange={e => setHeaderInfo({ ...headerInfo, namaBupati: e.target.value })}
-                  className="w-full px-3 py-1.5 border border-slate-300 rounded-xl text-slate-800"
-                />
-              </div>
-              <div>
-                <label className="block text-slate-500 font-medium mb-1">Jabatan Kepala Daerah</label>
+                <label className="block text-slate-600 font-semibold mb-1">Jabatan Kepala Daerah</label>
                 <input
                   type="text"
                   value={headerInfo.jabatanBupati}
-                  onChange={e => setHeaderInfo({ ...headerInfo, jabatanBupati: e.target.value })}
-                  className="w-full px-3 py-1.5 border border-slate-300 rounded-xl text-slate-800"
+                  onChange={e => handleUpdateHeaderField('jabatanBupati', e.target.value)}
+                  placeholder="Contoh: Bupati Mimika"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none"
                 />
+              </div>
+
+              <div>
+                <label className="block text-slate-600 font-semibold mb-1">Nama Kepala Daerah</label>
+                <input
+                  type="text"
+                  value={headerInfo.namaBupati}
+                  onChange={e => handleUpdateHeaderField('namaBupati', e.target.value)}
+                  placeholder="Nama & Gelar Kepala Daerah"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-600 font-semibold mb-1">Nama Inspektur Daerah</label>
+                <input
+                  type="text"
+                  value={headerInfo.namaInspektur}
+                  onChange={e => handleUpdateHeaderField('namaInspektur', e.target.value)}
+                  placeholder="Nama & Gelar Inspektur"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-600 font-semibold mb-1">NIP Inspektur Daerah</label>
+                <input
+                  type="text"
+                  value={headerInfo.nipInspektur}
+                  onChange={e => handleUpdateHeaderField('nipInspektur', e.target.value)}
+                  placeholder="19750812 199903 1 004"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-slate-800 font-mono focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none"
+                />
+              </div>
+            </div>
+
+            {/* Visual Lembar Pengesahan Dokumen */}
+            <div className="mt-5 pt-4 border-t border-slate-200">
+              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block mb-3">
+                Pratinjau Lembar Pengesahan (Muncul di Cetak Excel & PDF):
+              </span>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="p-4 bg-slate-50/70 rounded-xl border border-slate-200 text-center flex flex-col justify-between min-h-[140px]">
+                  <div>
+                    <p className="text-[11px] text-slate-500 italic">Mengesahkan,</p>
+                    <p className="text-xs font-bold text-slate-800 mt-0.5">{headerInfo.jabatanBupati || 'Kepala Daerah'}</p>
+                  </div>
+                  <div className="my-2">
+                    <span className="text-[10px] text-slate-400 italic block">( Tanda Tangan & Cap Jabatan )</span>
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold text-slate-900 underline">{headerInfo.namaBupati || '-'}</p>
+                  </div>
+                </div>
+
+                <div className="p-4 bg-slate-50/70 rounded-xl border border-slate-200 text-center flex flex-col justify-between min-h-[140px]">
+                  <div>
+                    <p className="text-[11px] text-slate-500 italic">{headerInfo.tempatTanggalPengesahan || `Timika,    Januari ${headerInfo.tahun}`}</p>
+                    <p className="text-xs font-bold text-slate-800 mt-0.5">Inspektur Daerah</p>
+                  </div>
+                  <div className="my-2">
+                    <span className="text-[10px] text-slate-400 italic block">( Tanda Tangan & Cap Dinas )</span>
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold text-slate-900 underline">{headerInfo.namaInspektur || '-'}</p>
+                    <p className="text-[10px] text-slate-600 font-mono mt-0.5">NIP. {headerInfo.nipInspektur || '-'}</p>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
