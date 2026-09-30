@@ -2,12 +2,27 @@ import ExcelJS from 'exceljs';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
+export interface ExportSigners {
+  kiri?: {
+    jabatan: string;
+    nama: string;
+    nip?: string;
+  };
+  kanan?: {
+    tanggal?: string;
+    jabatan: string;
+    nama: string;
+    nip?: string;
+  };
+}
+
 export const exportToExcel = async (
   filename: string,
   title: string,
   subtitle: string,
   columns: { header: string; key: string; width?: number }[],
-  data: any[]
+  data: any[],
+  signers?: ExportSigners
 ) => {
   const workbook = new ExcelJS.Workbook();
   const worksheet = workbook.addWorksheet('Sheet 1');
@@ -78,6 +93,45 @@ export const exportToExcel = async (
     worksheet.getColumn(idx + 1).width = col.width || 20;
   });
 
+  // Optional Signatures block in Excel
+  if (signers && (signers.kiri || signers.kanan)) {
+    worksheet.addRow([]);
+    worksheet.addRow([]);
+
+    const leftColIdx = 2; // Column B
+    const rightColIdx = Math.max(columns.length - 1, 5); // Near right edge
+
+    const sigRow1 = worksheet.addRow([]);
+    sigRow1.getCell(leftColIdx).value = 'Mengesahkan,';
+    sigRow1.getCell(leftColIdx).font = { name: 'Arial', size: 10, italic: true };
+    if (signers.kanan?.tanggal) {
+      sigRow1.getCell(rightColIdx).value = signers.kanan.tanggal;
+      sigRow1.getCell(rightColIdx).font = { name: 'Arial', size: 10, italic: true };
+    }
+
+    const sigRow2 = worksheet.addRow([]);
+    sigRow2.getCell(leftColIdx).value = signers.kiri?.jabatan || 'Kepala Daerah';
+    sigRow2.getCell(leftColIdx).font = { name: 'Arial', size: 10, bold: true };
+    sigRow2.getCell(rightColIdx).value = signers.kanan?.jabatan || 'Inspektur Daerah';
+    sigRow2.getCell(rightColIdx).font = { name: 'Arial', size: 10, bold: true };
+
+    worksheet.addRow([]);
+    worksheet.addRow([]);
+    worksheet.addRow([]);
+
+    const sigRow3 = worksheet.addRow([]);
+    sigRow3.getCell(leftColIdx).value = signers.kiri?.nama || '';
+    sigRow3.getCell(leftColIdx).font = { name: 'Arial', size: 10, bold: true, underline: true };
+    sigRow3.getCell(rightColIdx).value = signers.kanan?.nama || '';
+    sigRow3.getCell(rightColIdx).font = { name: 'Arial', size: 10, bold: true, underline: true };
+
+    if (signers.kanan?.nip) {
+      const sigRow4 = worksheet.addRow([]);
+      sigRow4.getCell(rightColIdx).value = `NIP. ${signers.kanan.nip}`;
+      sigRow4.getCell(rightColIdx).font = { name: 'Arial', size: 9 };
+    }
+  }
+
   const buffer = await workbook.xlsx.writeBuffer();
   const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   const url = window.URL.createObjectURL(blob);
@@ -94,7 +148,8 @@ export function exportToPdf(
   arg3: string | string[],
   arg4?: string[] | any[][],
   arg5?: any[][] | 'portrait' | 'landscape',
-  arg6?: 'portrait' | 'landscape'
+  arg6?: 'portrait' | 'landscape',
+  signers?: ExportSigners
 ) {
   let subtitle = '';
   let headers: string[] = [];
@@ -158,6 +213,53 @@ export function exportToPdf(
       doc.text(str, data.settings.margin.left, doc.internal.pageSize.getHeight() - 6);
     }
   });
+
+  // Optional signers block on PDF
+  if (signers && (signers.kiri || signers.kanan)) {
+    const finalY = (doc as any).lastAutoTable?.finalY || 30;
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const pageWidth = doc.internal.pageSize.getWidth();
+    let sigY = finalY + 12;
+
+    if (sigY + 35 > pageHeight - 12) {
+      doc.addPage();
+      sigY = 25;
+    }
+
+    doc.setFontSize(8.5);
+    doc.setTextColor(30, 41, 59);
+
+    if (signers.kiri) {
+      const xKiri = 50;
+      doc.setFont('helvetica', 'normal');
+      doc.text('Mengesahkan,', xKiri, sigY, { align: 'center' });
+      doc.setFont('helvetica', 'bold');
+      doc.text(signers.kiri.jabatan, xKiri, sigY + 5, { align: 'center' });
+      doc.text(signers.kiri.nama, xKiri, sigY + 24, { align: 'center' });
+      if (signers.kiri.nip) {
+        doc.setFont('helvetica', 'normal');
+        doc.text(`NIP. ${signers.kiri.nip}`, xKiri, sigY + 28, { align: 'center' });
+      }
+    }
+
+    if (signers.kanan) {
+      const xKanan = pageWidth - 50;
+      doc.setFont('helvetica', 'normal');
+      if (signers.kanan.tanggal) {
+        doc.text(signers.kanan.tanggal, xKanan, sigY, { align: 'center' });
+        doc.setFont('helvetica', 'bold');
+        doc.text(signers.kanan.jabatan, xKanan, sigY + 5, { align: 'center' });
+      } else {
+        doc.setFont('helvetica', 'bold');
+        doc.text(signers.kanan.jabatan, xKanan, sigY + 5, { align: 'center' });
+      }
+      doc.text(signers.kanan.nama, xKanan, sigY + 24, { align: 'center' });
+      if (signers.kanan.nip) {
+        doc.setFont('helvetica', 'normal');
+        doc.text(`NIP. ${signers.kanan.nip}`, xKanan, sigY + 28, { align: 'center' });
+      }
+    }
+  }
 
   doc.save(`${filename}.pdf`);
 }
