@@ -1,9 +1,10 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { AuditUniverseItem } from './ppbrData';
+import { AuditUniverseItem, INITIAL_AUDIT_UNIVERSE } from './ppbrData';
 import { exportToExcel, exportToPdf } from './ppbrExport';
 import { ConfirmModal } from '../common/ConfirmModal';
 import { db } from '../../lib/firebase';
 import { doc, onSnapshot, setDoc, getDoc } from 'firebase/firestore';
+import { getScopedKey, getScopedPPBRDocId, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
 import {
   Search,
   Plus,
@@ -39,42 +40,50 @@ const DEFAULT_IRBAN_LIST = ['Irban I', 'Irban II', 'Irban III', 'Irban IV', 'Irb
 
 export interface AuditUniverseViewProps {
   isAdmin?: boolean;
+  year?: string;
 }
 
-export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: isAdminProp }) => {
+export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: isAdminProp, year }) => {
+  const currentYear = year || getSelectedYear();
+  const storageKey = getScopedKey('ppbr_audit_universe', currentYear);
+  const docId = getScopedPPBRDocId('audit_universe', currentYear);
+
   const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
     try {
       const saved = localStorage.getItem('isman_user');
       if (saved) {
         const u = JSON.parse(saved);
-        return u.role === 'Administrator' || u.username?.toLowerCase() === 'admin';
+        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.role === 'Operator' || u.role === 'Inspektur' || u.username?.toLowerCase() === 'admin' || u.username?.toLowerCase() === 'inspektur';
       }
     } catch (_) {}
-    return false;
+    return true; // Default to true in standalone PPBR mode so user can access cleanup tools
   })();
 
   const [data, setData] = useState<AuditUniverseItem[]>(() => {
-    const saved = localStorage.getItem('ppbr_audit_universe');
+    const saved = localStorage.getItem(storageKey);
     if (saved !== null) {
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
           return parsed.map((item: any) => ({
             ...item,
-            irbanPengampu: item.irbanPengampu === 'Irban Khusus' ? 'Irbansus' : (item.irbanPengampu || 'Irban I'),
+            irbanPengampu: item.irbanPengampu === 'Irban Khusus' ? 'Irbansus' : (item.irbanPengampu || ''),
             indikatorSasaranRpjmd: item.indikatorSasaranRpjmd || '',
             indikatorTujuanRpjmd: item.indikatorTujuanRpjmd || DEFAULT_INDIKATOR_TUJUAN[item.tujuanRpjmd] || ''
           }));
         }
       } catch (e) {
-        console.error('Failed to parse ppbr_audit_universe', e);
+        console.error('Failed to parse ' + storageKey, e);
       }
     }
-    return [];
+    // Only return initial demo/seed data for 2026. For 2027 and other years, start empty!
+    return currentYear === DEFAULT_YEAR ? INITIAL_AUDIT_UNIVERSE : [];
   });
 
   const [searchTerm, setSearchTerm] = useState('');
   const [filterIrban, setFilterIrban] = useState('ALL');
+  const [filterOPD, setFilterOPD] = useState('ALL');
+  const [filterProgram, setFilterProgram] = useState('ALL');
   const [mergeViewMode, setMergeViewMode] = useState<boolean>(true);
 
   // Cloud Real-time Synchronization State
@@ -108,7 +117,7 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
   });
 
   const [showLocalRestoreBanner, setShowLocalRestoreBanner] = useState<boolean>(() => {
-    return localBackupData !== null && localBackupData.length > 0;
+    return currentYear === DEFAULT_YEAR && localBackupData !== null && localBackupData.length > 0;
   });
 
   // Irban List state with local persistence & Firestore sync (Single Source of Truth)
@@ -130,7 +139,7 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
   // Real-time listener: Listen to Firestore Cloud Database updates
   useEffect(() => {
     // 1. Subscribe to Audit Universe in Firestore
-    const auDocRef = doc(db, 'ppbr_data', 'audit_universe');
+    const auDocRef = doc(db, 'ppbr_data', docId);
     const unsubAU = onSnapshot(auDocRef, (snap) => {
       if (snap.exists()) {
         const snapData = snap.data();
@@ -138,12 +147,12 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
           isRemoteUpdateRef.current = true;
           const mapped = snapData.items.map((item: any) => ({
             ...item,
-            irbanPengampu: item.irbanPengampu === 'Irban Khusus' ? 'Irbansus' : (item.irbanPengampu || 'Irban I'),
+            irbanPengampu: item.irbanPengampu === 'Irban Khusus' ? 'Irbansus' : (item.irbanPengampu || ''),
             indikatorSasaranRpjmd: item.indikatorSasaranRpjmd || '',
             indikatorTujuanRpjmd: item.indikatorTujuanRpjmd || DEFAULT_INDIKATOR_TUJUAN[item.tujuanRpjmd] || ''
           }));
           setData(mapped);
-          localStorage.setItem('ppbr_audit_universe', JSON.stringify(mapped));
+          localStorage.setItem(storageKey, JSON.stringify(mapped));
           setCloudStatus('synced');
           if (snapData.updatedAt) {
             try {
@@ -161,7 +170,7 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
         setDoc(auDocRef, {
           items: data,
           updatedAt: new Date().toISOString(),
-          title: 'Audit Universe Master'
+          title: `Audit Universe Master ${currentYear}`
         }, { merge: true }).catch(err => {
           console.warn('Initial push to cloud error:', err);
         });
@@ -326,7 +335,7 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
     });
   };
 
-  const defaultNewRowIrban = filterIrban !== 'ALL' ? filterIrban : (allIrbanOptions[0] || 'Irban I');
+  const defaultNewRowIrban = filterIrban !== 'ALL' && filterIrban !== 'UNASSIGNED' ? filterIrban : '';
 
   // Confirm Modal state
   const [confirmModal, setConfirmModal] = useState<{
@@ -388,7 +397,7 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
       if (snap.exists() && Array.isArray(snap.data()?.items)) {
         const mapped = snap.data().items.map((item: any) => ({
           ...item,
-          irbanPengampu: item.irbanPengampu === 'Irban Khusus' ? 'Irbansus' : (item.irbanPengampu || 'Irban I'),
+          irbanPengampu: item.irbanPengampu === 'Irban Khusus' ? 'Irbansus' : (item.irbanPengampu || ''),
           indikatorSasaranRpjmd: item.indikatorSasaranRpjmd || '',
           indikatorTujuanRpjmd: item.indikatorTujuanRpjmd || DEFAULT_INDIKATOR_TUJUAN[item.tujuanRpjmd] || ''
         }));
@@ -467,7 +476,7 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
                 programRpjmd: item.programRpjmd || '',
                 indikatorProgramRpjmd: item.indikatorProgramRpjmd || '',
                 opdPengampu: item.opdPengampu || '',
-                irbanPengampu: item.irbanPengampu === 'Irban Khusus' ? 'Irbansus' : (item.irbanPengampu || 'Irban I'),
+                irbanPengampu: item.irbanPengampu === 'Irban Khusus' ? 'Irbansus' : (item.irbanPengampu || ''),
                 tujuanSasaranRenstra: item.tujuanSasaranRenstra || '',
                 indikatorRenstra: item.indikatorRenstra || '',
                 programRenstra: item.programRenstra || '',
@@ -782,6 +791,68 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
     });
   };
 
+  // Daftar OPD Unik dari data
+  const allOpdOptions = useMemo(() => {
+    const set = new Set<string>();
+    data.forEach(d => {
+      const opd = (d.opdPengampu || '').trim();
+      if (opd) set.add(opd);
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [data]);
+
+  // Daftar Program Unik dari data
+  const allProgramOptions = useMemo(() => {
+    const set = new Set<string>();
+    data.forEach(d => {
+      const prog = (d.programRpjmd || '').trim();
+      if (prog) set.add(prog);
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [data]);
+
+  // Deteksi baris kosong (tanpa Program RPJMD, tanpa OPD, tanpa Program Renstra)
+  const isRowEmpty = (item: AuditUniverseItem) => {
+    const hasProgram = Boolean(item.programRpjmd && item.programRpjmd.trim().length > 0);
+    const hasOpd = Boolean(item.opdPengampu && item.opdPengampu.trim().length > 0);
+    const hasRenstra = Boolean(item.programRenstra && item.programRenstra.trim().length > 0);
+    return !hasProgram && !hasOpd && !hasRenstra;
+  };
+
+  const emptyRowsCount = useMemo(() => {
+    return data.filter(isRowEmpty).length;
+  }, [data]);
+
+  // Fitur Admin: Hapus baris-baris kosong sekaligus
+  const handleCleanEmptyRows = () => {
+    if (emptyRowsCount === 0) {
+      setConfirmModal({
+        isOpen: true,
+        title: 'Tidak Ada Baris Kosong',
+        message: 'Tabel Audit Universe saat ini tidak memiliki baris kosong. Seluruh baris telah memiliki data Program atau OPD.',
+        confirmText: 'Tutup',
+        variant: 'info',
+        onConfirm: () => {}
+      });
+      return;
+    }
+
+    setConfirmModal({
+      isOpen: true,
+      title: `Hapus ${emptyRowsCount} Baris Kosong?`,
+      message: `Sistem mendeteksi ada ${emptyRowsCount} baris kosong (tanpa nama Program dan tanpa OPD pengampu). Apakah Anda yakin ingin menghapus seluruh baris kosong tersebut sekaligus?`,
+      detail: 'Seluruh baris yang telah terisi data akan tetap aman dan nomor urut akan dirapikan kembali secara otomatis.',
+      confirmText: `Ya, Hapus ${emptyRowsCount} Baris Kosong`,
+      variant: 'danger',
+      onConfirm: () => {
+        const cleaned = data
+          .filter(item => !isRowEmpty(item))
+          .map((item, idx) => ({ ...item, no: idx + 1 }));
+        handleSaveData(cleaned, true);
+      }
+    });
+  };
+
   // Filtered data
   const filteredData = useMemo(() => {
     return data.filter(item => {
@@ -792,11 +863,31 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
         (item.opdPengampu || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
         (item.programRenstra || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
         (item.irbanPengampu || '').toLowerCase().includes(searchTerm.toLowerCase());
-      const rowIrban = item.irbanPengampu === 'Irban Khusus' ? 'Irbansus' : (item.irbanPengampu || '');
-      const matchIrban = filterIrban === 'ALL' || item.irbanPengampu === filterIrban || rowIrban === filterIrban;
-      return matchSearch && matchIrban;
+
+      const rowIrban = item.irbanPengampu === 'Irban Khusus' ? 'Irbansus' : (item.irbanPengampu || '').trim();
+      const matchIrban = filterIrban === 'ALL'
+        ? true
+        : filterIrban === 'UNASSIGNED'
+          ? (!rowIrban || rowIrban === 'Belum Diisi')
+          : (item.irbanPengampu === filterIrban || rowIrban === filterIrban);
+
+      const rowOpd = (item.opdPengampu || '').trim();
+      const matchOPD = filterOPD === 'ALL'
+        ? true
+        : filterOPD === 'UNASSIGNED'
+          ? !rowOpd
+          : rowOpd === filterOPD;
+
+      const rowProg = (item.programRpjmd || '').trim();
+      const matchProgram = filterProgram === 'ALL'
+        ? true
+        : filterProgram === 'UNASSIGNED'
+          ? !rowProg
+          : rowProg === filterProgram;
+
+      return matchSearch && matchIrban && matchOPD && matchProgram;
     });
-  }, [data, searchTerm, filterIrban]);
+  }, [data, searchTerm, filterIrban, filterOPD, filterProgram]);
 
   // Compute Spans for Merging Identical Cells
   const spanInfo = useMemo(() => {
@@ -1184,7 +1275,8 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
             />
           </div>
 
-          <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {/* Filter Irban */}
             <select
               value={filterIrban}
               onChange={e => {
@@ -1195,8 +1287,12 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
                 }
               }}
               className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 focus:outline-hidden focus:ring-2 focus:ring-blue-500 cursor-pointer transition shadow-xs"
+              title="Filter Irban Pengampu"
             >
               <option value="ALL">Semua Irban</option>
+              <option value="UNASSIGNED" className="text-amber-700 font-bold bg-amber-50">
+                ⚠️ Belum Diisi (Tanpa Irban)
+              </option>
               {allIrbanOptions.map(irban => (
                 <option key={irban} value={irban}>
                   {irban}
@@ -1206,6 +1302,58 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
                 + Tambahkan Irban...
               </option>
             </select>
+
+            {/* Filter OPD Pengampu */}
+            <select
+              value={filterOPD}
+              onChange={e => setFilterOPD(e.target.value)}
+              className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 focus:outline-hidden focus:ring-2 focus:ring-blue-500 cursor-pointer transition shadow-xs max-w-[170px] truncate"
+              title="Filter Perangkat Daerah (OPD Pengampu)"
+            >
+              <option value="ALL">Semua OPD</option>
+              <option value="UNASSIGNED" className="text-amber-700 font-bold bg-amber-50">
+                ⚠️ Belum Diisi OPD
+              </option>
+              {allOpdOptions.map(opd => (
+                <option key={opd} value={opd}>
+                  {opd}
+                </option>
+              ))}
+            </select>
+
+            {/* Filter Program RPJMD */}
+            <select
+              value={filterProgram}
+              onChange={e => setFilterProgram(e.target.value)}
+              className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 focus:outline-hidden focus:ring-2 focus:ring-blue-500 cursor-pointer transition shadow-xs max-w-[190px] truncate"
+              title="Filter Program RPJMD"
+            >
+              <option value="ALL">Semua Program RPJMD</option>
+              <option value="UNASSIGNED" className="text-amber-700 font-bold bg-amber-50">
+                ⚠️ Belum Diisi Program
+              </option>
+              {allProgramOptions.map(prog => (
+                <option key={prog} value={prog}>
+                  {prog}
+                </option>
+              ))}
+            </select>
+
+            {(filterIrban !== 'ALL' || filterOPD !== 'ALL' || filterProgram !== 'ALL') && (
+              <button
+                type="button"
+                onClick={() => {
+                  setFilterIrban('ALL');
+                  setFilterOPD('ALL');
+                  setFilterProgram('ALL');
+                }}
+                className="px-2 py-2 text-[11px] text-rose-600 hover:text-rose-700 font-semibold underline"
+                title="Reset seluruh filter"
+              >
+                Reset Filter
+              </button>
+            )}
+
             <button
               type="button"
               onClick={() => setIsManageIrbanOpen(true)}
@@ -1219,6 +1367,22 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
         </div>
 
         <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end">
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={handleCleanEmptyRows}
+              className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 transition shadow-xs ${
+                emptyRowsCount > 0
+                  ? 'bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300'
+                  : 'bg-slate-50 text-slate-400 border border-slate-200 hover:bg-slate-100'
+              }`}
+              title="Hapus baris-baris kosong yang tidak memiliki program dan OPD"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+              <span>Hapus Baris Kosong {emptyRowsCount > 0 ? `(${emptyRowsCount})` : ''}</span>
+            </button>
+          )}
+
           <button
             onClick={handleAddRow}
             className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-xs transition"
@@ -1618,7 +1782,7 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
                       {/* RENSTRA: Irban Pengampu */}
                       <td className="p-1.5 text-center border-r border-slate-200">
                         <select
-                          value={allIrbanOptions.includes(item.irbanPengampu) ? item.irbanPengampu : (allIrbanOptions[0] || 'Irban I')}
+                          value={item.irbanPengampu || ''}
                           onChange={e => {
                             if (e.target.value === '__ADD_NEW__') {
                               openAddIrban('row', item.id);
@@ -1626,8 +1790,13 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
                               handleCellChange(item.id, 'irbanPengampu', e.target.value);
                             }
                           }}
-                          className="w-full p-1.5 bg-indigo-50/60 hover:bg-white focus:bg-white border border-indigo-200 rounded-md text-xs font-semibold text-indigo-900 focus:outline-hidden focus:ring-1 focus:ring-indigo-500 transition cursor-pointer"
+                          className={`w-full p-1.5 rounded-md text-xs transition cursor-pointer focus:outline-hidden ${
+                            !item.irbanPengampu || item.irbanPengampu.trim() === ''
+                              ? 'bg-amber-50 text-amber-800 border border-amber-300 font-bold focus:ring-1 focus:ring-amber-500'
+                              : 'bg-indigo-50/60 hover:bg-white focus:bg-white border border-indigo-200 font-semibold text-indigo-900 focus:ring-1 focus:ring-indigo-500'
+                          }`}
                         >
+                          <option value="">-- Belum Diisi --</option>
                           {allIrbanOptions.map(irban => (
                             <option key={irban} value={irban}>
                               {irban}
