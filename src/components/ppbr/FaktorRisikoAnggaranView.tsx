@@ -113,7 +113,8 @@ export const FaktorRisikoAnggaranView: React.FC<FaktorRisikoAnggaranViewProps> =
       const saved = localStorage.getItem('isman_user');
       if (saved) {
         const u = JSON.parse(saved);
-        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.role === 'Operator' || u.role === 'Inspektur' || u.username?.toLowerCase() === 'admin' || u.username?.toLowerCase() === 'inspektur';
+        if (u.role === 'Operator') return false;
+        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.username?.toLowerCase() === 'admin';
       }
     } catch (_) {}
     return true;
@@ -816,13 +817,15 @@ export const FaktorRisikoAnggaranView: React.FC<FaktorRisikoAnggaranViewProps> =
                           >
                             <Edit3 className="w-4 h-4" />
                           </button>
-                          <button
-                            onClick={() => requestResetPenilaian(item)}
-                            className="p-1.5 text-amber-600 hover:text-amber-800 hover:bg-amber-50 rounded"
-                            title="Hapus / Reset Penilaian (Set Anggaran Rp 0, Skala 1)"
-                          >
-                            <RotateCcw className="w-4 h-4" />
-                          </button>
+                          {isAdmin && (
+                            <button
+                              onClick={() => requestResetPenilaian(item)}
+                              className="p-1.5 text-amber-600 hover:text-amber-800 hover:bg-amber-50 rounded"
+                              title="Hapus / Reset Penilaian (Set Anggaran Rp 0, Skala 1)"
+                            >
+                              <RotateCcw className="w-4 h-4" />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
