@@ -3,6 +3,7 @@ import { AreaTidakMasukPKPTItem, INITIAL_TIDAK_MASUK_PKPT } from './ppbrData';
 import { exportToExcel, exportToPdf } from './ppbrExport';
 import { ConfirmModal } from '../common/ConfirmModal';
 import { getMenu11Items, getMenu12Items, getMandatoryDefaultOPD } from './ppbrSyncHelpers';
+import { getScopedKey, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
 import {
   Ban,
   Plus,
@@ -33,10 +34,30 @@ interface CandidateArea {
   kategori: string;
 }
 
-export const AreaTidakMasukPKPTView: React.FC = () => {
+export interface AreaTidakMasukPKPTViewProps {
+  isAdmin?: boolean;
+  year?: string;
+}
+
+export const AreaTidakMasukPKPTView: React.FC<AreaTidakMasukPKPTViewProps> = ({ isAdmin: isAdminProp, year }) => {
+  const currentYear = year || getSelectedYear();
+  const storageKey = getScopedKey('ppbr_tidak_masuk_pkpt', currentYear);
+
+  const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
+    try {
+      const saved = localStorage.getItem('isman_user');
+      if (saved) {
+        const u = JSON.parse(saved);
+        if (u.role === 'Operator') return false;
+        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.username?.toLowerCase() === 'admin';
+      }
+    } catch (_) {}
+    return true;
+  })();
+
   const [data, setData] = useState<AreaTidakMasukPKPTItem[]>(() => {
-    const saved = localStorage.getItem('ppbr_tidak_masuk_pkpt');
-    return saved ? JSON.parse(saved) : INITIAL_TIDAK_MASUK_PKPT;
+    const saved = localStorage.getItem(storageKey);
+    return saved ? JSON.parse(saved) : (currentYear === DEFAULT_YEAR ? INITIAL_TIDAK_MASUK_PKPT : []);
   });
 
   const [confirmModal, setConfirmModal] = useState<{
@@ -87,7 +108,7 @@ export const AreaTidakMasukPKPTView: React.FC = () => {
 
   const handleSaveData = (newData: AreaTidakMasukPKPTItem[]) => {
     setData(newData);
-    localStorage.setItem('ppbr_tidak_masuk_pkpt', JSON.stringify(newData));
+    localStorage.setItem(storageKey, JSON.stringify(newData));
   };
 
   const showToast = (msg: string) => {
@@ -97,8 +118,8 @@ export const AreaTidakMasukPKPTView: React.FC = () => {
 
   // Ambil daftar kandidat dari Menu 11 & Menu 12
   const getAllCandidates = (): CandidateArea[] => {
-    const m11 = getMenu11Items();
-    const m12 = getMenu12Items();
+    const m11 = getMenu11Items(currentYear);
+    const m12 = getMenu12Items(currentYear);
 
     const candidates: CandidateArea[] = [];
 
@@ -381,7 +402,7 @@ export const AreaTidakMasukPKPTView: React.FC = () => {
               <span>PDF</span>
             </button>
 
-            {data.length > 0 && (
+            {isAdmin && data.length > 0 && (
               <button
                 onClick={requestResetData}
                 className="px-3 py-2.5 bg-slate-800 hover:bg-rose-900/60 text-slate-300 hover:text-rose-200 border border-slate-700 rounded-xl text-xs font-medium flex items-center gap-1.5 transition"
