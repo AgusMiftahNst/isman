@@ -11,6 +11,7 @@ import {
   GeneratedPKPTResult,
   ExistingCustomPKPT
 } from './ppbrSyncHelpers';
+import { getScopedKey, getScopedPPBRDocId, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
 import {
   CalendarCheck,
   Edit3,
@@ -50,23 +51,47 @@ export const DEFAULT_PKPT_HEADER_INFO: PKPTHeaderInfo = {
   tempatTanggalPengesahan: 'Timika,    Januari 2025'
 };
 
-export const FormatPKPTBerbasisRisikoView: React.FC = () => {
+export interface FormatPKPTBerbasisRisikoViewProps {
+  isAdmin?: boolean;
+  year?: string;
+}
+
+export const FormatPKPTBerbasisRisikoView: React.FC<FormatPKPTBerbasisRisikoViewProps> = ({ isAdmin: isAdminProp, year }) => {
+  const currentYear = year || getSelectedYear();
+  const pkptKey = getScopedKey('ppbr_pkpt_final', currentYear);
+  const pkptMetaKey = getScopedKey('ppbr_pkpt_meta', currentYear);
+  const pkptHeaderKey = getScopedKey('ppbr_pkpt_header_info', currentYear);
+  const docHeaderId = getScopedPPBRDocId('pkpt_header', currentYear);
+  const docFinalId = getScopedPPBRDocId('pkpt_final', currentYear);
+
+  const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
+    try {
+      const saved = localStorage.getItem('isman_user');
+      if (saved) {
+        const u = JSON.parse(saved);
+        if (u.role === 'Operator') return false;
+        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.username?.toLowerCase() === 'admin';
+      }
+    } catch (_) {}
+    return true;
+  })();
+
   // Hanya membaca data yang sudah tersimpan di localStorage (tidak otomatis overwrite)
   const [data, setData] = useState<FormatPKPTItem[]>(() => {
-    const saved = localStorage.getItem('ppbr_pkpt_final');
+    const saved = localStorage.getItem(pkptKey);
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) return parsed;
       } catch (e) {
-        console.error('Error parsing ppbr_pkpt_final', e);
+        console.error('Error parsing pkpt key', e);
       }
     }
     return [];
   });
 
   const [syncMeta, setSyncMeta] = useState<GeneratedPKPTResult | null>(() => {
-    const saved = localStorage.getItem('ppbr_pkpt_meta');
+    const saved = localStorage.getItem(pkptMetaKey);
     if (saved) {
       try {
         return JSON.parse(saved);
@@ -81,43 +106,53 @@ export const FormatPKPTBerbasisRisikoView: React.FC = () => {
 
   // Pengaturan identitas disimpan permanen di localStorage agar tidak kembali ke awal saat pindah menu atau refresh
   const [headerInfo, setHeaderInfo] = useState<PKPTHeaderInfo>(() => {
-    const saved = localStorage.getItem('ppbr_pkpt_header_info');
+    const defaultInfo: PKPTHeaderInfo = {
+      ...DEFAULT_PKPT_HEADER_INFO,
+      tahun: currentYear,
+      tempatTanggalPengesahan: `Timika,    Januari ${currentYear}`
+    };
+    const saved = localStorage.getItem(pkptHeaderKey);
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
         if (parsed && typeof parsed === 'object') {
           return {
-            tahun: parsed.tahun ?? DEFAULT_PKPT_HEADER_INFO.tahun,
-            namaInspektur: parsed.namaInspektur ?? DEFAULT_PKPT_HEADER_INFO.namaInspektur,
-            nipInspektur: parsed.nipInspektur ?? DEFAULT_PKPT_HEADER_INFO.nipInspektur,
-            namaBupati: parsed.namaBupati ?? DEFAULT_PKPT_HEADER_INFO.namaBupati,
-            jabatanBupati: parsed.jabatanBupati ?? DEFAULT_PKPT_HEADER_INFO.jabatanBupati,
-            tempatTanggalPengesahan: parsed.tempatTanggalPengesahan ?? DEFAULT_PKPT_HEADER_INFO.tempatTanggalPengesahan
+            tahun: parsed.tahun ?? defaultInfo.tahun,
+            namaInspektur: parsed.namaInspektur ?? defaultInfo.namaInspektur,
+            nipInspektur: parsed.nipInspektur ?? defaultInfo.nipInspektur,
+            namaBupati: parsed.namaBupati ?? defaultInfo.namaBupati,
+            jabatanBupati: parsed.jabatanBupati ?? defaultInfo.jabatanBupati,
+            tempatTanggalPengesahan: parsed.tempatTanggalPengesahan ?? defaultInfo.tempatTanggalPengesahan
           };
         }
       } catch (e) {
-        console.error('Error parsing ppbr_pkpt_header_info', e);
+        console.error('Error parsing pkpt header info', e);
       }
     }
-    return DEFAULT_PKPT_HEADER_INFO;
+    return defaultInfo;
   });
 
   const handleUpdateHeaderField = (field: keyof PKPTHeaderInfo, value: string) => {
     setHeaderInfo(prev => {
       const next = { ...prev, [field]: value };
-      localStorage.setItem('ppbr_pkpt_header_info', JSON.stringify(next));
+      localStorage.setItem(pkptHeaderKey, JSON.stringify(next));
       try {
-        setDoc(doc(db, 'ppbr_data', 'pkpt_header'), next, { merge: true }).catch(() => {});
+        setDoc(doc(db, 'ppbr_data', docHeaderId), next, { merge: true }).catch(() => {});
       } catch (_) {}
       return next;
     });
   };
 
   const handleResetHeaderInfo = () => {
-    setHeaderInfo(DEFAULT_PKPT_HEADER_INFO);
-    localStorage.setItem('ppbr_pkpt_header_info', JSON.stringify(DEFAULT_PKPT_HEADER_INFO));
+    const defaultInfo: PKPTHeaderInfo = {
+      ...DEFAULT_PKPT_HEADER_INFO,
+      tahun: currentYear,
+      tempatTanggalPengesahan: `Timika,    Januari ${currentYear}`
+    };
+    setHeaderInfo(defaultInfo);
+    localStorage.setItem(pkptHeaderKey, JSON.stringify(defaultInfo));
     try {
-      setDoc(doc(db, 'ppbr_data', 'pkpt_header'), DEFAULT_PKPT_HEADER_INFO, { merge: true }).catch(() => {});
+      setDoc(doc(db, 'ppbr_data', docHeaderId), defaultInfo, { merge: true }).catch(() => {});
     } catch (_) {}
     setToastMessage('Pengaturan identitas berhasil dikembalikan ke default.');
     setTimeout(() => setToastMessage(null), 3000);
@@ -125,7 +160,7 @@ export const FormatPKPTBerbasisRisikoView: React.FC = () => {
 
   // Real-time synchronization with Firestore
   useEffect(() => {
-    const unsubHeader = onSnapshot(doc(db, 'ppbr_data', 'pkpt_header'), (snap) => {
+    const unsubHeader = onSnapshot(doc(db, 'ppbr_data', docHeaderId), (snap) => {
       if (snap.exists()) {
         const d = snap.data() as Partial<PKPTHeaderInfo>;
         if (d && typeof d === 'object') {
@@ -138,19 +173,19 @@ export const FormatPKPTBerbasisRisikoView: React.FC = () => {
               jabatanBupati: d.jabatanBupati ?? prev.jabatanBupati,
               tempatTanggalPengesahan: d.tempatTanggalPengesahan ?? prev.tempatTanggalPengesahan
             };
-            localStorage.setItem('ppbr_pkpt_header_info', JSON.stringify(merged));
+            localStorage.setItem(pkptHeaderKey, JSON.stringify(merged));
             return merged;
           });
         }
       }
     }, () => {});
 
-    const unsubFinal = onSnapshot(doc(db, 'ppbr_data', 'pkpt_final'), (snap) => {
+    const unsubFinal = onSnapshot(doc(db, 'ppbr_data', docFinalId), (snap) => {
       if (snap.exists()) {
         const snapData = snap.data();
         if (snapData && Array.isArray(snapData.items) && snapData.items.length > 0) {
           setData(snapData.items);
-          localStorage.setItem('ppbr_pkpt_final', JSON.stringify(snapData.items));
+          localStorage.setItem(pkptKey, JSON.stringify(snapData.items));
         }
       }
     }, () => {});
@@ -159,7 +194,7 @@ export const FormatPKPTBerbasisRisikoView: React.FC = () => {
       unsubHeader();
       unsubFinal();
     };
-  }, []);
+  }, [docHeaderId, docFinalId, pkptHeaderKey, pkptKey]);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [activeTab, setActiveTab] = useState<'ALL' | 'PBBR' | 'MANDATORY'>('ALL');
@@ -171,9 +206,9 @@ export const FormatPKPTBerbasisRisikoView: React.FC = () => {
   const handleManualSync = () => {
     setIsSyncing(true);
 
-    const m11List = getMenu11Items();
-    const m12List = getMenu12Items();
-    const m13List = getMenu13Items();
+    const m11List = getMenu11Items(currentYear);
+    const m12List = getMenu12Items(currentYear);
+    const m13List = getMenu13Items(currentYear);
 
     // Hanya pertahankan penyesuaian kustom yang pernah disimpan/diedit manual oleh user di Menu 14
     let existingCustom = new Map<string, ExistingCustomPKPT>();
@@ -199,10 +234,10 @@ export const FormatPKPTBerbasisRisikoView: React.FC = () => {
 
     setData(result.items);
     setSyncMeta(result);
-    localStorage.setItem('ppbr_pkpt_final', JSON.stringify(result.items));
-    localStorage.setItem('ppbr_pkpt_meta', JSON.stringify(result));
+    localStorage.setItem(pkptKey, JSON.stringify(result.items));
+    localStorage.setItem(pkptMetaKey, JSON.stringify(result));
     try {
-      setDoc(doc(db, 'ppbr_data', 'pkpt_final'), { items: result.items, updatedAt: new Date().toISOString() }, { merge: true }).catch(() => {});
+      setDoc(doc(db, 'ppbr_data', docFinalId), { items: result.items, updatedAt: new Date().toISOString() }, { merge: true }).catch(() => {});
     } catch (_) {}
 
     setTimeout(() => {
@@ -236,9 +271,9 @@ export const FormatPKPTBerbasisRisikoView: React.FC = () => {
 
     const updated = data.map(d => (d.id === updatedItem.id ? updatedItem : d));
     setData(updated);
-    localStorage.setItem('ppbr_pkpt_final', JSON.stringify(updated));
+    localStorage.setItem(pkptKey, JSON.stringify(updated));
     try {
-      setDoc(doc(db, 'ppbr_data', 'pkpt_final'), { items: updated, updatedAt: new Date().toISOString() }, { merge: true }).catch(() => {});
+      setDoc(doc(db, 'ppbr_data', docFinalId), { items: updated, updatedAt: new Date().toISOString() }, { merge: true }).catch(() => {});
     } catch (_) {}
     setShowEditModal(false);
     setEditingItem(null);
@@ -768,14 +803,16 @@ export const FormatPKPTBerbasisRisikoView: React.FC = () => {
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
                   Tersimpan Otomatis
                 </span>
-                <button
-                  type="button"
-                  onClick={handleResetHeaderInfo}
-                  className="text-[11px] text-slate-500 hover:text-rose-600 px-2.5 py-1 rounded-lg border border-slate-200 hover:border-rose-200 hover:bg-rose-50 transition"
-                  title="Kembalikan identitas ke default"
-                >
-                  Reset Default
-                </button>
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={handleResetHeaderInfo}
+                    className="text-[11px] text-slate-500 hover:text-rose-600 px-2.5 py-1 rounded-lg border border-slate-200 hover:border-rose-200 hover:bg-rose-50 transition"
+                    title="Kembalikan identitas ke default"
+                  >
+                    Reset Default
+                  </button>
+                )}
               </div>
             </div>
 
