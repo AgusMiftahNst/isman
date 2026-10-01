@@ -74,7 +74,8 @@ export const PPBRMasterContainer: React.FC<PPBRMasterContainerProps> = ({
       const saved = localStorage.getItem('isman_user');
       if (saved) {
         const u = JSON.parse(saved);
-        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.role === 'Operator' || u.role === 'Inspektur' || u.username?.toLowerCase() === 'admin' || u.username?.toLowerCase() === 'inspektur';
+        if (u.role === 'Operator') return false;
+        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.username?.toLowerCase() === 'admin';
       }
     } catch (_) {}
     return true;
@@ -116,9 +117,9 @@ export const PPBRMasterContainer: React.FC<PPBRMasterContainerProps> = ({
       case 'ppbr-12':
         return <AreaPengawasanMandatoryView key={`apm-${activeYear}`} isAdmin={isAdmin} year={activeYear} />;
       case 'ppbr-13':
-        return <AreaTidakMasukPKPTView key={`atm-${activeYear}`} year={activeYear} />;
+        return <AreaTidakMasukPKPTView key={`atm-${activeYear}`} isAdmin={isAdmin} year={activeYear} />;
       case 'ppbr-14':
-        return <FormatPKPTBerbasisRisikoView key={`fpb-${activeYear}`} year={activeYear} />;
+        return <FormatPKPTBerbasisRisikoView key={`fpb-${activeYear}`} isAdmin={isAdmin} year={activeYear} />;
       default:
         return <AuditUniverseView key={`au-def-${activeYear}`} isAdmin={isAdmin} year={activeYear} />;
     }
