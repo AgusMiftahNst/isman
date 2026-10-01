@@ -2,27 +2,33 @@ import React, { useState } from 'react';
 import { PrioritasDesaPuskesmasItem, INITIAL_PRIORITAS_DESA_PUSKESMAS } from './ppbrData';
 import { exportToExcel, exportToPdf } from './ppbrExport';
 import { ConfirmModal } from '../common/ConfirmModal';
+import { getScopedKey, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
 import { Landmark, Plus, Trash2, Edit3, X, Info, FileSpreadsheet, FileText, Search, Trophy, RotateCcw } from 'lucide-react';
 
 export interface PrioritasDesaPuskesmasViewProps {
   isAdmin?: boolean;
+  year?: string;
 }
 
-export const PrioritasDesaPuskesmasView: React.FC<PrioritasDesaPuskesmasViewProps> = ({ isAdmin: isAdminProp }) => {
+export const PrioritasDesaPuskesmasView: React.FC<PrioritasDesaPuskesmasViewProps> = ({ isAdmin: isAdminProp, year }) => {
+  const currentYear = year || getSelectedYear();
+  const storageKey = getScopedKey('ppbr_prioritas_desa_puskesmas', currentYear);
+
   const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
     try {
       const saved = localStorage.getItem('isman_user');
       if (saved) {
         const u = JSON.parse(saved);
-        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.role === 'Operator' || u.role === 'Inspektur' || u.username?.toLowerCase() === 'admin' || u.username?.toLowerCase() === 'inspektur';
+        if (u.role === 'Operator') return false;
+        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.username?.toLowerCase() === 'admin';
       }
     } catch (_) {}
     return true;
   })();
 
   const [data, setData] = useState<PrioritasDesaPuskesmasItem[]>(() => {
-    const saved = localStorage.getItem('ppbr_prioritas_desa_puskesmas');
-    return saved ? JSON.parse(saved) : INITIAL_PRIORITAS_DESA_PUSKESMAS;
+    const saved = localStorage.getItem(storageKey);
+    return saved ? JSON.parse(saved) : (currentYear === DEFAULT_YEAR ? INITIAL_PRIORITAS_DESA_PUSKESMAS : []);
   });
 
   const [confirmModal, setConfirmModal] = useState<{
@@ -77,7 +83,7 @@ export const PrioritasDesaPuskesmasView: React.FC<PrioritasDesaPuskesmasViewProp
     const sorted = [...newData].sort((a, b) => b.skorTotal - a.skorTotal);
     const withRank = sorted.map((item, idx) => ({ ...item, ranking: idx + 1, no: idx + 1 }));
     setData(withRank);
-    localStorage.setItem('ppbr_prioritas_desa_puskesmas', JSON.stringify(withRank));
+    localStorage.setItem(storageKey, JSON.stringify(withRank));
   };
 
   const handleAddItem = (e: React.FormEvent) => {
@@ -300,7 +306,7 @@ export const PrioritasDesaPuskesmasView: React.FC<PrioritasDesaPuskesmasViewProp
                 <span>Reset Penilaian</span>
               </button>
             )}
-            {data.length > 0 && (
+            {isAdmin && data.length > 0 && (
               <button
                 onClick={requestResetData}
                 className="px-3 py-2 bg-slate-800 hover:bg-rose-900/60 text-slate-300 hover:text-rose-200 border border-slate-700 rounded-xl text-xs font-medium flex items-center gap-1.5 transition"
