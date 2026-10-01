@@ -53,7 +53,8 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
       const saved = localStorage.getItem('isman_user');
       if (saved) {
         const u = JSON.parse(saved);
-        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.role === 'Operator' || u.role === 'Inspektur' || u.username?.toLowerCase() === 'admin' || u.username?.toLowerCase() === 'inspektur';
+        if (u.role === 'Operator') return false;
+        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.username?.toLowerCase() === 'admin';
       }
     } catch (_) {}
     return true; // Default to true in standalone PPBR mode so user can access cleanup tools
@@ -1414,13 +1415,15 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
             <Download className="w-3.5 h-3.5 text-indigo-500" />
             <span className="hidden sm:inline">Ekspor JSON</span>
           </button>
-          <button
-            onClick={requestResetData}
-            className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 border border-slate-200 rounded-lg transition"
-            title="Kosongkan Tabel"
-          >
-            <Trash2 className="w-4 h-4" />
-          </button>
+          {isAdmin && (
+            <button
+              onClick={requestResetData}
+              className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 border border-slate-200 rounded-lg transition"
+              title="Kosongkan Tabel"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -2221,15 +2224,17 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
 
             {/* Footer */}
             <div className="flex items-center justify-between pt-3 border-t border-slate-100 shrink-0">
-              <button
-                type="button"
-                onClick={handleResetIrbanToDefault}
-                className="text-xs text-slate-500 hover:text-indigo-600 font-medium flex items-center gap-1 transition"
-                title="Kembalikan daftar Irban ke standar awal"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                <span>Reset ke Standar</span>
-              </button>
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={handleResetIrbanToDefault}
+                  className="text-xs text-slate-500 hover:text-indigo-600 font-medium flex items-center gap-1 transition"
+                  title="Kembalikan daftar Irban ke standar awal"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Reset ke Standar</span>
+                </button>
+              )}
 
               <button
                 type="button"
