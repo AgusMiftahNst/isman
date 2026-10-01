@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { PrioritasProgramRPJMDItem, INITIAL_PRIORITAS_RPJMD } from './ppbrData';
 import { exportToExcel, exportToPdf } from './ppbrExport';
 import { ConfirmModal } from '../common/ConfirmModal';
+import { getScopedKey, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
 import {
   getAuditUniversePrograms,
   getFaktorAnggaranMap,
@@ -38,22 +39,27 @@ import {
 
 export interface PrioritasProgramRPJMDViewProps {
   isAdmin?: boolean;
+  year?: string;
 }
 
-export const PrioritasProgramRPJMDView: React.FC<PrioritasProgramRPJMDViewProps> = ({ isAdmin: isAdminProp }) => {
+export const PrioritasProgramRPJMDView: React.FC<PrioritasProgramRPJMDViewProps> = ({ isAdmin: isAdminProp, year }) => {
+  const currentYear = year || getSelectedYear();
+  const storageKey = getScopedKey('ppbr_prioritas_program', currentYear);
+
   const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
     try {
       const saved = localStorage.getItem('isman_user');
       if (saved) {
         const u = JSON.parse(saved);
-        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.role === 'Operator' || u.role === 'Inspektur' || u.username?.toLowerCase() === 'admin' || u.username?.toLowerCase() === 'inspektur';
+        if (u.role === 'Operator') return false;
+        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.username?.toLowerCase() === 'admin';
       }
     } catch (_) {}
     return true;
   })();
 
   const [data, setData] = useState<PrioritasProgramRPJMDItem[]>(() => {
-    const saved = localStorage.getItem('ppbr_prioritas_program');
+    const saved = localStorage.getItem(storageKey);
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
@@ -61,10 +67,10 @@ export const PrioritasProgramRPJMDView: React.FC<PrioritasProgramRPJMDViewProps>
           return sortAndRankMenu8(parsed);
         }
       } catch (e) {
-        console.error('Error loading ppbr_prioritas_program', e);
+        console.error('Error loading ' + storageKey, e);
       }
     }
-    return INITIAL_PRIORITAS_RPJMD;
+    return currentYear === DEFAULT_YEAR ? INITIAL_PRIORITAS_RPJMD : [];
   });
 
   const [confirmModal, setConfirmModal] = useState<{
@@ -119,16 +125,16 @@ export const PrioritasProgramRPJMDView: React.FC<PrioritasProgramRPJMDViewProps>
   const handleSaveData = (newData: PrioritasProgramRPJMDItem[]) => {
     const ranked = sortAndRankMenu8(newData);
     setData(ranked);
-    localStorage.setItem('ppbr_prioritas_program', JSON.stringify(ranked));
+    localStorage.setItem(storageKey, JSON.stringify(ranked));
   };
 
   // Fungsi sinkronisasi otomatis dari Menu 1, 4, 5, 6, 7
   const performSyncFromMenus = (mode: 'full' | 'update_only' = 'full') => {
-    const menu1List = getAuditUniversePrograms();
-    const anggaranMap = getFaktorAnggaranMap();
-    const unggulanMap = getFaktorUnggulanMap();
-    const temuanMap = getFaktorTemuanMap();
-    const isuMap = getFaktorIsuMap();
+    const menu1List = getAuditUniversePrograms(currentYear);
+    const anggaranMap = getFaktorAnggaranMap(currentYear);
+    const unggulanMap = getFaktorUnggulanMap(currentYear);
+    const temuanMap = getFaktorTemuanMap(currentYear);
+    const isuMap = getFaktorIsuMap(currentYear);
 
     const existingMap = new Map<string, PrioritasProgramRPJMDItem>();
     data.forEach(item => {
@@ -200,9 +206,9 @@ export const PrioritasProgramRPJMDView: React.FC<PrioritasProgramRPJMDViewProps>
     setShowSyncModal(false);
   };
 
-  // Inisialisasi awal saat tabel kosong
+  // Inisialisasi awal saat tabel kosong (hanya untuk tahun default 2026)
   useEffect(() => {
-    if (data.length === 0) {
+    if (data.length === 0 && currentYear === DEFAULT_YEAR) {
       performSyncFromMenus('full');
     }
   }, []);
@@ -922,13 +928,15 @@ export const PrioritasProgramRPJMDView: React.FC<PrioritasProgramRPJMDViewProps>
                             >
                               <Edit3 className="w-4 h-4" />
                             </button>
-                            <button
-                              onClick={() => requestResetPenilaian(item)}
-                              className="p-1.5 text-amber-600 hover:text-amber-800 hover:bg-amber-50 rounded-lg transition"
-                              title="Hapus / Reset Penilaian (Set Skala = 1)"
-                            >
-                              <RotateCcw className="w-4 h-4" />
-                            </button>
+                            {isAdmin && (
+                              <button
+                                onClick={() => requestResetPenilaian(item)}
+                                className="p-1.5 text-amber-600 hover:text-amber-800 hover:bg-amber-50 rounded-lg transition"
+                                title="Hapus / Reset Penilaian (Set Skala = 1)"
+                              >
+                                <RotateCcw className="w-4 h-4" />
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
