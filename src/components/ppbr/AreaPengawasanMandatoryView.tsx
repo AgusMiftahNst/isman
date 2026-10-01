@@ -4,6 +4,7 @@ import { exportToExcel, exportToPdf } from './ppbrExport';
 import { ConfirmModal } from '../common/ConfirmModal';
 import { db } from '../../lib/firebase';
 import { doc, onSnapshot, setDoc, getDoc } from 'firebase/firestore';
+import { getScopedKey, getScopedPPBRDocId, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
 import {
   BookOpen,
   Plus,
@@ -105,15 +106,21 @@ const STANDARD_MANDATORY_RECOMMENDATIONS: AreaMandatoryItem[] = [
 
 export interface AreaPengawasanMandatoryViewProps {
   isAdmin?: boolean;
+  year?: string;
 }
 
-export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewProps> = ({ isAdmin: isAdminProp }) => {
+export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewProps> = ({ isAdmin: isAdminProp, year }) => {
+  const currentYear = year || getSelectedYear();
+  const storageKey = getScopedKey('ppbr_area_mandatory', currentYear);
+  const docId = getScopedPPBRDocId('area_mandatory', currentYear);
+
   const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
     try {
       const saved = localStorage.getItem('isman_user');
       if (saved) {
         const u = JSON.parse(saved);
-        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.role === 'Operator' || u.role === 'Inspektur' || u.username?.toLowerCase() === 'admin' || u.username?.toLowerCase() === 'inspektur';
+        if (u.role === 'Operator') return false;
+        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.username?.toLowerCase() === 'admin';
       }
     } catch (_) {}
     return true;
@@ -121,7 +128,7 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
 
   // Main data state loaded from localStorage initially
   const [data, setData] = useState<AreaMandatoryItem[]>(() => {
-    const saved = localStorage.getItem('ppbr_area_mandatory');
+    const saved = localStorage.getItem(storageKey);
     if (saved !== null) {
       try {
         const parsed = JSON.parse(saved);
@@ -129,7 +136,7 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
           return parsed;
         }
       } catch (e) {
-        console.error('Failed to parse ppbr_area_mandatory', e);
+        console.error('Failed to parse ' + storageKey, e);
       }
     }
     return [];
@@ -158,7 +165,7 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
   });
 
   const [showLocalRestoreBanner, setShowLocalRestoreBanner] = useState<boolean>(() => {
-    return localBackupData !== null && localBackupData.length > 0;
+    return currentYear === DEFAULT_YEAR && localBackupData !== null && localBackupData.length > 0;
   });
 
   // Cloud Sync state
@@ -208,16 +215,16 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
 
   // Real-time listener: Listen to Firestore Cloud Database updates for Area Mandatory
   useEffect(() => {
-    const docRef = doc(db, 'ppbr_data', 'area_mandatory');
+    const docRef = doc(db, 'ppbr_data', docId);
     const unsub = onSnapshot(docRef, (snap) => {
       if (snap.exists()) {
         const snapData = snap.data();
         if (snapData && Array.isArray(snapData.items)) {
           isRemoteUpdateRef.current = true;
           setData(snapData.items);
-          localStorage.setItem('ppbr_area_mandatory', JSON.stringify(snapData.items));
+          localStorage.setItem(storageKey, JSON.stringify(snapData.items));
           window.dispatchEvent(new Event('ppbr_data_updated'));
-          if (snapData.items.length > 0) {
+          if (snapData.items.length > 0 && currentYear === DEFAULT_YEAR) {
             localStorage.setItem('ppbr_area_mandatory_local_backup', JSON.stringify(snapData.items));
             setLocalBackupData(snapData.items);
           }
@@ -239,7 +246,7 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
           setDoc(docRef, {
             items: data,
             updatedAt: new Date().toISOString(),
-            title: 'Area Pengawasan Mandatory'
+            title: `Area Pengawasan Mandatory (${currentYear})`
           }, { merge: true }).catch(err => {
             console.warn('Initial push area mandatory to cloud error:', err);
           });
@@ -256,14 +263,14 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
         clearTimeout(saveTimeoutRef.current);
       }
     };
-  }, []);
+  }, [docId, storageKey, currentYear]);
 
   // Dual Persistence: Save to local state + localStorage + Firestore Cloud
   const handleSaveData = (newData: AreaMandatoryItem[], immediateCloud = false) => {
     setData(newData);
-    localStorage.setItem('ppbr_area_mandatory', JSON.stringify(newData));
+    localStorage.setItem(storageKey, JSON.stringify(newData));
     window.dispatchEvent(new Event('ppbr_data_updated'));
-    if (newData.length > 0) {
+    if (newData.length > 0 && currentYear === DEFAULT_YEAR) {
       localStorage.setItem('ppbr_area_mandatory_local_backup', JSON.stringify(newData));
       setLocalBackupData(newData);
     }
@@ -304,20 +311,20 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
     setIsManualSyncing(true);
     setCloudStatus('saving');
     try {
-      const snap = await getDoc(doc(db, 'ppbr_data', 'area_mandatory'));
+      const snap = await getDoc(doc(db, 'ppbr_data', docId));
       if (snap.exists() && Array.isArray(snap.data()?.items)) {
         const items = snap.data().items;
         setData(items);
-        localStorage.setItem('ppbr_area_mandatory', JSON.stringify(items));
-        if (items.length > 0) {
+        localStorage.setItem(storageKey, JSON.stringify(items));
+        if (items.length > 0 && currentYear === DEFAULT_YEAR) {
           localStorage.setItem('ppbr_area_mandatory_local_backup', JSON.stringify(items));
           setLocalBackupData(items);
         }
       } else {
-        await setDoc(doc(db, 'ppbr_data', 'area_mandatory'), {
+        await setDoc(doc(db, 'ppbr_data', docId), {
           items: data,
           updatedAt: new Date().toISOString(),
-          title: 'Area Pengawasan Mandatory'
+          title: `Area Pengawasan Mandatory (${currentYear})`
         }, { merge: true });
       }
       setCloudStatus('synced');
@@ -422,10 +429,12 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
 
   // Explicitly snapshot current table to local storage
   const handleSaveCurrentToLocalStorage = () => {
-    localStorage.setItem('ppbr_area_mandatory', JSON.stringify(data));
-    localStorage.setItem('ppbr_area_mandatory_local_backup', JSON.stringify(data));
-    setLocalBackupData(data);
-    alert(`Berhasil menyimpan ${data.length} baris data Area Mandatory ke penyimpanan lokal browser laptop ini!`);
+    localStorage.setItem(storageKey, JSON.stringify(data));
+    if (currentYear === DEFAULT_YEAR) {
+      localStorage.setItem('ppbr_area_mandatory_local_backup', JSON.stringify(data));
+      setLocalBackupData(data);
+    }
+    alert(`Berhasil menyimpan ${data.length} baris data Area Mandatory (${currentYear}) ke penyimpanan lokal browser laptop ini!`);
   };
 
   // Item additions & row controls
@@ -817,7 +826,7 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
             <span className="hidden sm:inline">Ekspor JSON</span>
           </button>
 
-          {data.length > 0 && (
+          {isAdmin && data.length > 0 && (
             <button
               onClick={requestResetData}
               className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 border border-slate-200 rounded-xl transition"
