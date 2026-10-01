@@ -49,7 +49,8 @@ export const KematanganMRView: React.FC<KematanganMRViewProps> = ({ isAdmin: isA
       const saved = localStorage.getItem('isman_user');
       if (saved) {
         const u = JSON.parse(saved);
-        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.role === 'Operator' || u.role === 'Inspektur' || u.username?.toLowerCase() === 'admin' || u.username?.toLowerCase() === 'inspektur';
+        if (u.role === 'Operator') return false;
+        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.username?.toLowerCase() === 'admin';
       }
     } catch (_) {}
     return true;
@@ -608,7 +609,7 @@ export const KematanganMRView: React.FC<KematanganMRViewProps> = ({ isAdmin: isA
               </button>
             )}
 
-            {data.length > 0 && (
+            {isAdmin && data.length > 0 && (
               <button
                 onClick={requestResetData}
                 className="px-3 py-2 bg-slate-800 hover:bg-rose-900/60 text-slate-300 hover:text-rose-200 border border-slate-700 rounded-xl text-xs font-medium flex items-center gap-1.5 transition"
