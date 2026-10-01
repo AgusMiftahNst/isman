@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { PrioritasUnitKerjaOPDItem, INITIAL_PRIORITAS_OPD } from './ppbrData';
 import { exportToExcel, exportToPdf } from './ppbrExport';
 import { ConfirmModal } from '../common/ConfirmModal';
+import { getScopedKey, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
 import {
   getAuditUniverseOPDs,
   getFaktorAnggaranMap,
@@ -34,22 +35,27 @@ import {
 
 export interface PrioritasUnitKerjaOPDViewProps {
   isAdmin?: boolean;
+  year?: string;
 }
 
-export const PrioritasUnitKerjaOPDView: React.FC<PrioritasUnitKerjaOPDViewProps> = ({ isAdmin: isAdminProp }) => {
+export const PrioritasUnitKerjaOPDView: React.FC<PrioritasUnitKerjaOPDViewProps> = ({ isAdmin: isAdminProp, year }) => {
+  const currentYear = year || getSelectedYear();
+  const storageKey = getScopedKey('ppbr_prioritas_opd', currentYear);
+
   const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
     try {
       const saved = localStorage.getItem('isman_user');
       if (saved) {
         const u = JSON.parse(saved);
-        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.role === 'Operator' || u.role === 'Inspektur' || u.username?.toLowerCase() === 'admin' || u.username?.toLowerCase() === 'inspektur';
+        if (u.role === 'Operator') return false;
+        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.username?.toLowerCase() === 'admin';
       }
     } catch (_) {}
     return true;
   })();
 
   const [data, setData] = useState<PrioritasUnitKerjaOPDItem[]>(() => {
-    const saved = localStorage.getItem('ppbr_prioritas_opd');
+    const saved = localStorage.getItem(storageKey);
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
@@ -57,10 +63,10 @@ export const PrioritasUnitKerjaOPDView: React.FC<PrioritasUnitKerjaOPDViewProps>
           return sortAndRankMenu9(parsed);
         }
       } catch (e) {
-        console.error('Error loading ppbr_prioritas_opd', e);
+        console.error('Error loading ' + storageKey, e);
       }
     }
-    return INITIAL_PRIORITAS_OPD;
+    return currentYear === DEFAULT_YEAR ? INITIAL_PRIORITAS_OPD : [];
   });
 
   const [confirmModal, setConfirmModal] = useState<{
@@ -114,16 +120,16 @@ export const PrioritasUnitKerjaOPDView: React.FC<PrioritasUnitKerjaOPDViewProps>
   const handleSaveData = (newData: PrioritasUnitKerjaOPDItem[]) => {
     const ranked = sortAndRankMenu9(newData);
     setData(ranked);
-    localStorage.setItem('ppbr_prioritas_opd', JSON.stringify(ranked));
+    localStorage.setItem(storageKey, JSON.stringify(ranked));
   };
 
   // Sinkronisasi otomatis dari Menu 1, 4, 5, 6, 7 khusus OPD (fokus ke OPD, tanpa program)
   const performSyncFromMenus = (mode: 'full' | 'update_only' = 'full') => {
-    const opdList = getAuditUniverseOPDs();
-    const anggaranMap = getFaktorAnggaranMap();
-    const unggulanMap = getFaktorUnggulanMap();
-    const temuanMap = getFaktorTemuanMap();
-    const isuMap = getFaktorIsuMap();
+    const opdList = getAuditUniverseOPDs(currentYear);
+    const anggaranMap = getFaktorAnggaranMap(currentYear);
+    const unggulanMap = getFaktorUnggulanMap(currentYear);
+    const temuanMap = getFaktorTemuanMap(currentYear);
+    const isuMap = getFaktorIsuMap(currentYear);
 
     const existingMap = new Map<string, PrioritasUnitKerjaOPDItem>();
     data.forEach(item => {
@@ -224,7 +230,7 @@ export const PrioritasUnitKerjaOPDView: React.FC<PrioritasUnitKerjaOPDViewProps>
   };
 
   useEffect(() => {
-    if (data.length === 0) {
+    if (data.length === 0 && currentYear === DEFAULT_YEAR) {
       performSyncFromMenus('full');
     }
   }, []);
@@ -592,13 +598,14 @@ export const PrioritasUnitKerjaOPDView: React.FC<PrioritasUnitKerjaOPDViewProps>
                 <span>Reset Penilaian</span>
               </button>
             )}
-            {data.length > 0 && (
+            {isAdmin && data.length > 0 && (
               <button
                 onClick={requestResetData}
                 className="px-3 py-2 bg-slate-800 hover:bg-rose-900/60 text-slate-300 hover:text-rose-200 border border-slate-700 rounded-xl text-xs font-medium flex items-center gap-1.5 transition"
                 title="Kosongkan Data"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
+                <span>Kosongkan</span>
               </button>
             )}
           </div>
