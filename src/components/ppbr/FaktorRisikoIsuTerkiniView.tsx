@@ -7,6 +7,7 @@ import {
 } from './ppbrData';
 import { exportToExcel, exportToPdf } from './ppbrExport';
 import { ConfirmModal } from '../common/ConfirmModal';
+import { getScopedKey, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
 import { 
   Flame, 
   Plus, 
@@ -29,8 +30,9 @@ import {
 } from 'lucide-react';
 
 // Helper: Mengambil data Audit Universe dari Menu 1
-const getAuditUniverseData = (): AuditUniverseItem[] => {
-  const saved = localStorage.getItem('ppbr_audit_universe');
+const getAuditUniverseData = (targetYear?: string): AuditUniverseItem[] => {
+  const currentY = targetYear || getSelectedYear();
+  const saved = localStorage.getItem(getScopedKey('ppbr_audit_universe', currentY));
   if (saved) {
     try {
       const parsed = JSON.parse(saved);
@@ -41,7 +43,7 @@ const getAuditUniverseData = (): AuditUniverseItem[] => {
       console.error('Failed to parse ppbr_audit_universe', e);
     }
   }
-  return INITIAL_AUDIT_UNIVERSE;
+  return currentY === DEFAULT_YEAR ? INITIAL_AUDIT_UNIVERSE : [];
 };
 
 // Helper: Mengambil daftar unik program RPJMD dan OPD pengampu langsung dari Menu 1
@@ -57,8 +59,8 @@ export interface Menu1ProgramItem {
   anggaran?: number;
 }
 
-const getMenu1ProgramsList = (): Menu1ProgramItem[] => {
-  const auList = getAuditUniverseData();
+const getMenu1ProgramsList = (targetYear?: string): Menu1ProgramItem[] => {
+  const auList = getAuditUniverseData(targetYear);
   const map = new Map<string, Menu1ProgramItem>();
 
   auList.forEach((item, idx) => {
@@ -101,15 +103,20 @@ const calculateSkalaStatic = (val: number): number => {
 
 export interface FaktorRisikoIsuTerkiniViewProps {
   isAdmin?: boolean;
+  year?: string;
 }
 
-export const FaktorRisikoIsuTerkiniView: React.FC<FaktorRisikoIsuTerkiniViewProps> = ({ isAdmin: isAdminProp }) => {
+export const FaktorRisikoIsuTerkiniView: React.FC<FaktorRisikoIsuTerkiniViewProps> = ({ isAdmin: isAdminProp, year }) => {
+  const currentYear = year || getSelectedYear();
+  const storageKey = getScopedKey('ppbr_faktor_isu_terkini', currentYear);
+
   const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
     try {
       const saved = localStorage.getItem('isman_user');
       if (saved) {
         const u = JSON.parse(saved);
-        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.role === 'Operator' || u.role === 'Inspektur' || u.username?.toLowerCase() === 'admin' || u.username?.toLowerCase() === 'inspektur';
+        if (u.role === 'Operator') return false;
+        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.username?.toLowerCase() === 'admin';
       }
     } catch (_) {}
     return true;
@@ -117,18 +124,22 @@ export const FaktorRisikoIsuTerkiniView: React.FC<FaktorRisikoIsuTerkiniViewProp
 
   // Inisialisasi data: Jika belum ada di localStorage, otomatis ambil dari Program RPJMD & OPD di Menu 1
   const [data, setData] = useState<FaktorRisikoIsuTerkiniItem[]>(() => {
-    const saved = localStorage.getItem('ppbr_faktor_isu_terkini');
+    const saved = localStorage.getItem(storageKey);
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       } catch (e) {
-        console.error('Failed to parse ppbr_faktor_isu_terkini', e);
+        console.error('Failed to parse ' + storageKey, e);
       }
     }
 
+    if (currentYear !== DEFAULT_YEAR) {
+      return [];
+    }
+
     // Auto-populate dari Program RPJMD dan OPD Menu 1 dengan kriteria awal Belum Diisi (-1)
-    const menu1List = getMenu1ProgramsList();
+    const menu1List = getMenu1ProgramsList(currentYear);
     if (menu1List.length > 0) {
       return menu1List.map((item, idx) => ({
         id: `fit-${idx + 1}-${Date.now()}`,
@@ -199,13 +210,13 @@ export const FaktorRisikoIsuTerkiniView: React.FC<FaktorRisikoIsuTerkiniViewProp
 
   const handleSaveData = (newData: FaktorRisikoIsuTerkiniItem[]) => {
     setData(newData);
-    localStorage.setItem('ppbr_faktor_isu_terkini', JSON.stringify(newData));
+    localStorage.setItem(storageKey, JSON.stringify(newData));
   };
 
   // Daftar program dari Menu 1 terkini
   const menu1Programs = useMemo(() => {
-    return getMenu1ProgramsList();
-  }, [showAddModal, showEditModal, showSyncModal]);
+    return getMenu1ProgramsList(currentYear);
+  }, [showAddModal, showEditModal, showSyncModal, currentYear]);
 
   // Saat memilih program RPJMD dari Menu 1 di Modal Tambah:
   const handleSelectProgramFromMenu1 = (progName: string) => {
@@ -410,7 +421,7 @@ export const FaktorRisikoIsuTerkiniView: React.FC<FaktorRisikoIsuTerkiniViewProp
 
   // --- LOGIKA SINKRONISASI DARI MENU 1 ---
   const handleOpenSyncModal = () => {
-    const list = getMenu1ProgramsList();
+    const list = getMenu1ProgramsList(currentYear);
     setSelectedSyncPrograms(list.map(p => p.programRpjmd));
     setSyncSearch('');
     setSyncFilter('ALL');
@@ -427,7 +438,7 @@ export const FaktorRisikoIsuTerkiniView: React.FC<FaktorRisikoIsuTerkiniViewProp
       confirmText: 'Ya, Sinkronisasikan',
       variant: 'warning',
       onConfirm: () => {
-        const menu1List = getMenu1ProgramsList().filter(p => selectedSyncPrograms.includes(p.programRpjmd));
+        const menu1List = getMenu1ProgramsList(currentYear).filter(p => selectedSyncPrograms.includes(p.programRpjmd));
 
         const existingMap = new Map<string, FaktorRisikoIsuTerkiniItem>();
         data.forEach(d => {
@@ -1029,13 +1040,15 @@ export const FaktorRisikoIsuTerkiniView: React.FC<FaktorRisikoIsuTerkiniViewProp
                         >
                           <Edit3 className="w-4 h-4" />
                         </button>
-                        <button
-                          onClick={() => requestResetPenilaian(item)}
-                          className="p-1.5 text-amber-600 hover:text-amber-800 hover:bg-amber-50 rounded transition"
-                          title="Hapus / Reset Penilaian (Set Kriteria = 0, Skala 1)"
-                        >
-                          <RotateCcw className="w-4 h-4" />
-                        </button>
+                        {isAdmin && (
+                          <button
+                            onClick={() => requestResetPenilaian(item)}
+                            className="p-1.5 text-amber-600 hover:text-amber-800 hover:bg-amber-50 rounded transition"
+                            title="Hapus / Reset Penilaian (Set Kriteria = 0, Skala 1)"
+                          >
+                            <RotateCcw className="w-4 h-4" />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
