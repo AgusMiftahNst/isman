@@ -45,7 +45,8 @@ import {
   Landmark,
   BookOpen,
   Ban,
-  CalendarCheck
+  CalendarCheck,
+  Calendar
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
@@ -55,6 +56,18 @@ import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
 import html2canvas from 'html2canvas';
 import { PPBRMasterContainer } from './components/ppbr/PPBRMasterContainer';
+import {
+  AVAILABLE_YEARS,
+  DEFAULT_YEAR,
+  getSelectedYear,
+  setSelectedYearStorage,
+  getScopedKey,
+  getRiskContextDocId,
+  getRiskRowsCacheKey,
+  getRiskContextCacheKey,
+  getScopedFinalDocId,
+  isDocMatchingYear
+} from './components/ppbr/ppbrYearHelper';
 
 // --- Types ---
 
@@ -268,6 +281,22 @@ export default function App() {
   const [changePassError, setChangePassError] = useState('');
   const [changePassSuccess, setChangePassSuccess] = useState('');
   const [isExporting, setIsExporting] = useState(false);
+  const [selectedYear, setSelectedYear] = useState<string>(() => getSelectedYear());
+
+  useEffect(() => {
+    const handleYearEvent = (e: any) => {
+      if (e?.detail && e.detail !== selectedYear) {
+        setSelectedYear(e.detail);
+      }
+    };
+    window.addEventListener('isman_year_changed', handleYearEvent);
+    return () => window.removeEventListener('isman_year_changed', handleYearEvent);
+  }, [selectedYear]);
+
+  const handleYearChange = (newYear: string) => {
+    setSelectedYear(newYear);
+    setSelectedYearStorage(newYear);
+  };
 
   const menuItems = useMemo(() => {
     if (!user) return [];
@@ -1603,6 +1632,19 @@ export default function App() {
             <p className="text-slate-600 text-[10px] font-black uppercase tracking-tight -mt-1 mb-4">Integrated Risk Management System</p>
             <h2 className="text-xl font-bold text-slate-900 uppercase italic">Pilih Kategori Penilaian / Modul</h2>
             <p className="text-slate-500 text-xs mt-1">Silahkan pilih modul penilaian risiko atau pengawasan untuk dilanjutkan</p>
+            <div className="mt-4 inline-flex items-center gap-2 bg-white px-3 py-1.5 rounded-xl border border-slate-200 shadow-xs">
+              <Calendar size={14} className="text-blue-600" />
+              <span className="text-[11px] font-black text-slate-500 uppercase tracking-wider">Tahun Anggaran:</span>
+              <select
+                value={selectedYear}
+                onChange={(e) => handleYearChange(e.target.value)}
+                className="bg-blue-50 text-blue-700 font-extrabold text-xs px-2.5 py-1 rounded-lg border border-blue-200 outline-none cursor-pointer hover:bg-blue-100 transition-colors"
+              >
+                {AVAILABLE_YEARS.map(y => (
+                  <option key={y} value={y}>{y}</option>
+                ))}
+              </select>
+            </div>
           </div>
           
           <div className={`p-8 grid grid-cols-1 ${isInspektoratUser ? 'md:grid-cols-3' : 'md:grid-cols-2'} gap-5 pb-12`}>
@@ -1872,7 +1914,23 @@ export default function App() {
               </div>
             )}
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
+            {/* Year Selector Dropdown */}
+            <div className="flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-200">
+              <Calendar size={14} className="text-slate-500" />
+              <span className="text-[11px] font-black uppercase tracking-wider text-slate-500 hidden sm:inline">Tahun:</span>
+              <select
+                value={selectedYear}
+                onChange={(e) => handleYearChange(e.target.value)}
+                className="bg-white text-slate-800 font-extrabold text-xs px-2.5 py-0.5 rounded border border-slate-200 outline-none cursor-pointer hover:border-blue-400 focus:ring-1 focus:ring-blue-500 transition-all"
+                title="Pilih Tahun Anggaran Penilaian"
+              >
+                {AVAILABLE_YEARS.map(y => (
+                  <option key={y} value={y}>{y}</option>
+                ))}
+              </select>
+            </div>
+
             <div className="flex bg-slate-100 p-1 rounded-lg gap-1 border border-slate-200">
                <button 
                  disabled={isExporting}
@@ -1889,8 +1947,6 @@ export default function App() {
                  <FileJson size={14} /> PDF
                </button>
             </div>
-
-
           </div>
         </header>
 
@@ -1929,7 +1985,7 @@ service cloud.firestore {
 
           <AnimatePresence mode="wait">
             <motion.div
-              key={`${selectedRiskType}-${activeMenu}`}
+              key={`${selectedRiskType}-${activeMenu}-${selectedYear}`}
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
@@ -1947,31 +2003,32 @@ service cloud.firestore {
                       setActiveMenu(num);
                     }}
                     onBackToRiskSelection={() => setSelectedRiskType(null)}
-                    isAdmin={user?.role === 'Administrator' || user?.username?.toLowerCase() === 'admin'}
+                    isAdmin={user ? (user.role === 'Administrator' || user.role === 'Admin' || user.username?.toLowerCase() === 'admin') : false}
+                    year={selectedYear}
                   />
                 )
               ) : activeMenu === 0 ? (
-                <MonitoringProgressView user={user!} onSelectUser={(u, rt) => { setViewingUser(u); setSelectedRiskType(rt); setActiveMenu(1); }} />
+                <MonitoringProgressView user={user!} onSelectUser={(u, rt) => { setViewingUser(u); setSelectedRiskType(rt); setActiveMenu(1); }} year={selectedYear} />
               ) : activeMenu === 1 ? (
-                <ContextSettingView user={viewingUser!} isReadOnly={isActuallyReadOnly} riskType={selectedRiskType || 'strategis'} isAdmin={user?.role === 'Administrator'} />
+                <ContextSettingView user={viewingUser!} isReadOnly={isActuallyReadOnly} riskType={selectedRiskType || 'strategis'} isAdmin={user?.role === 'Administrator'} year={selectedYear} />
               ) : activeMenu === 2 ? (
-                <RiskIdentificationView user={viewingUser!} isReadOnly={isActuallyReadOnly} riskType={selectedRiskType || 'strategis'} />
+                <RiskIdentificationView user={viewingUser!} isReadOnly={isActuallyReadOnly} riskType={selectedRiskType || 'strategis'} year={selectedYear} />
               ) : activeMenu === 3 ? (
-                <RiskAnalysisView user={viewingUser!} isReadOnly={isActuallyReadOnly} riskType={selectedRiskType || 'strategis'} />
+                <RiskAnalysisView user={viewingUser!} isReadOnly={isActuallyReadOnly} riskType={selectedRiskType || 'strategis'} year={selectedYear} />
               ) : activeMenu === 4 ? (
-                <RiskResidualView user={viewingUser!} isReadOnly={isActuallyReadOnly} riskType={selectedRiskType || 'strategis'} />
+                <RiskResidualView user={viewingUser!} isReadOnly={isActuallyReadOnly} riskType={selectedRiskType || 'strategis'} year={selectedYear} />
               ) : activeMenu === 5 ? (
-                <RiskTreatmentView user={viewingUser!} isReadOnly={isActuallyReadOnly} riskType={selectedRiskType || 'strategis'} />
+                <RiskTreatmentView user={viewingUser!} isReadOnly={isActuallyReadOnly} riskType={selectedRiskType || 'strategis'} year={selectedYear} />
               ) : activeMenu === 6 ? (
-                <MonitoringCommunicationView user={viewingUser!} isReadOnly={isActuallyReadOnly} riskType={selectedRiskType || 'strategis'} />
+                <MonitoringCommunicationView user={viewingUser!} isReadOnly={isActuallyReadOnly} riskType={selectedRiskType || 'strategis'} year={selectedYear} />
               ) : activeMenu === 7 ? (
-                <MonitoringPlanPIView user={viewingUser!} isReadOnly={isActuallyReadOnly} riskType={selectedRiskType || 'strategis'} />
+                <MonitoringPlanPIView user={viewingUser!} isReadOnly={isActuallyReadOnly} riskType={selectedRiskType || 'strategis'} year={selectedYear} />
               ) : activeMenu === 8 ? (
-                <RiskMapView user={viewingUser!} riskType={selectedRiskType || 'strategis'} />
+                <RiskMapView user={viewingUser!} riskType={selectedRiskType || 'strategis'} year={selectedYear} />
               ) : activeMenu === 9 ? (
-                <RiskOccurrenceMonitoringView user={viewingUser!} isReadOnly={isActuallyReadOnly} riskType={selectedRiskType || 'strategis'} />
+                <RiskOccurrenceMonitoringView user={viewingUser!} isReadOnly={isActuallyReadOnly} riskType={selectedRiskType || 'strategis'} year={selectedYear} />
               ) : activeMenu === 10 ? (
-                <FinalDocumentView user={viewingUser!} isAdmin={user!.role === 'Administrator'} isOperator={user!.role === 'Operator'} riskType={selectedRiskType || 'strategis'} />
+                <FinalDocumentView user={viewingUser!} isAdmin={user!.role === 'Administrator'} isOperator={user!.role === 'Operator'} riskType={selectedRiskType || 'strategis'} year={selectedYear} />
               ) : activeMenu === 11 ? (
                 <AccountManagementView accounts={accounts} />
               ) : (
@@ -2088,7 +2145,8 @@ service cloud.firestore {
 
 // --- Login Component ---
 
-function MonitoringProgressView({ user, onSelectUser }: { user: any, onSelectUser: (u: any, rt: 'strategis' | 'operasional') => void }) {
+function MonitoringProgressView({ user, onSelectUser, year }: { user: any, onSelectUser: (u: any, rt: 'strategis' | 'operasional') => void, year?: string }) {
+  const currentYear = year || getSelectedYear();
   const [accounts, setAccounts] = useState<any[]>([]);
   const [dbError, setDbError] = useState<string | null>(null);
   const [activeTooltip, setActiveTooltip] = useState<{accId: string, menuKey: string, msg: string} | null>(null);
@@ -2394,7 +2452,7 @@ function MonitoringProgressView({ user, onSelectUser }: { user: any, onSelectUse
 
       const baseRisks = risksState.filter(data => {
         const rt = data.riskType || 'strategis';
-        return data.createdByUid === acc.uid && rt === type;
+        return data.createdByUid === acc.uid && rt === type && isDocMatchingYear(data, currentYear);
       });
 
       const sortedByDefault = [...baseRisks].sort((a: any, b: any) => {
@@ -2404,7 +2462,7 @@ function MonitoringProgressView({ user, onSelectUser }: { user: any, onSelectUse
         return dateA - dateB;
       });
       
-      const contextDocId = `risk_context_${acc.uid}_${type}`;
+      const contextDocId = getRiskContextDocId(acc.uid, type, currentYear);
       const contextData = contextsState.find(d => d.id === contextDocId);
       const reasons: Record<string, string> = { context: '', identification: '', analysis: '', residual: '', treatment: '', comm: '', pi: '' };
       const getRiskName = (r: any, idx: number) => r.risikoKode?.trim() || `R${idx + 1}`;
@@ -2505,7 +2563,8 @@ function MonitoringProgressView({ user, onSelectUser }: { user: any, onSelectUse
       if (!hasPiPlan) reasons.pi = "Kekurangan Menu VII: " + missingPi.slice(0,2).join('; ');
 
       const hasHeatmap = (baseRisks.length > 0) && hasAnalysis && hasResidual;
-      const hasFinalDoc = finalDocsState.some(d => (d.id === acc.uid || d.uid === acc.uid) && (d.status === 'verified' || d.status === 'Verified'));
+      const finalDocId = getScopedFinalDocId(acc.uid, currentYear);
+      const hasFinalDoc = finalDocsState.some(d => (d.id === finalDocId || (d.uid === acc.uid && isDocMatchingYear(d, currentYear))) && (d.status === 'verified' || d.status === 'Verified'));
 
       const allSteps = [hasContext, hasIdentification, hasAnalysis, hasResidual, hasTreatment, hasComm, hasPiPlan, hasHeatmap, hasFinalDoc];
       let finalPercent = Math.round((allSteps.filter(Boolean).length / 9) * 100);
@@ -4027,10 +4086,11 @@ function ScoreTable({
   );
 }
 
-function RiskAnalysisView({ user, isReadOnly, riskType }: { user: any, isReadOnly?: boolean, riskType: 'strategis' | 'operasional' }) {
-  const contextId = `risk_context_${user.uid}_${riskType}`;
-  const rowsCacheKey = `cached_risk_id_rows_${user.uid}_${riskType}`;
-  const contextCacheKey = `cached_context_${user.uid}_${riskType}`;
+function RiskAnalysisView({ user, isReadOnly, riskType, year }: { user: any, isReadOnly?: boolean, riskType: 'strategis' | 'operasional', year?: string }) {
+  const currentYear = year || getSelectedYear();
+  const contextId = getRiskContextDocId(user.uid, riskType, currentYear);
+  const rowsCacheKey = getRiskRowsCacheKey(user.uid, riskType, currentYear);
+  const contextCacheKey = getRiskContextCacheKey(user.uid, riskType, currentYear);
 
   const [rows, setRows] = useState<any[]>(() => {
     try {
@@ -4079,7 +4139,8 @@ function RiskAnalysisView({ user, isReadOnly, riskType }: { user: any, isReadOnl
       );
 
       const snapshot = await getDocs(q);
-      const data = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+      const allData = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+      const data = allData.filter(d => isDocMatchingYear(d, currentYear));
       data.sort((a: any, b: any) => {
         if (a.order !== undefined && b.order !== undefined) return a.order - b.order;
         const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
@@ -4457,10 +4518,11 @@ const getRiskLevel = (d: number, k: number) => {
 };
 
 
-function RiskResidualView({ user, isReadOnly, riskType }: { user: any, isReadOnly?: boolean, riskType: 'strategis' | 'operasional' }) {
-  const contextId = `risk_context_${user.uid}_${riskType}`;
-  const rowsCacheKey = `cached_risk_id_rows_${user.uid}_${riskType}`;
-  const contextCacheKey = `cached_context_${user.uid}_${riskType}`;
+function RiskResidualView({ user, isReadOnly, riskType, year }: { user: any, isReadOnly?: boolean, riskType: 'strategis' | 'operasional', year?: string }) {
+  const currentYear = year || getSelectedYear();
+  const contextId = getRiskContextDocId(user.uid, riskType, currentYear);
+  const rowsCacheKey = getRiskRowsCacheKey(user.uid, riskType, currentYear);
+  const contextCacheKey = getRiskContextCacheKey(user.uid, riskType, currentYear);
 
   const [participantCount, setParticipantCount] = useState<number>(() => {
     try {
@@ -4531,7 +4593,8 @@ function RiskResidualView({ user, isReadOnly, riskType }: { user: any, isReadOnl
       );
 
       const snapshot = await getDocs(q);
-      const data = snapshot.docs.map(doc => {
+      const allDocs = snapshot.docs.filter(doc => isDocMatchingYear(doc.data(), currentYear));
+      const data = allDocs.map(doc => {
         const d = doc.data();
         const activeD = (d.dampakScores || []).slice(0, newestParticipantCount).filter((v: any) => v > 0);
         const activeK = (d.kemungkinanScores || []).slice(0, newestParticipantCount).filter((v: any) => v > 0);
@@ -4839,8 +4902,9 @@ function RiskResidualView({ user, isReadOnly, riskType }: { user: any, isReadOnl
   );
 }
 
-function RiskTreatmentView({ user, isReadOnly, riskType }: { user: any, isReadOnly?: boolean, riskType: 'strategis' | 'operasional' }) {
-  const rowsCacheKey = `cached_risk_id_rows_${user.uid}_${riskType}`;
+function RiskTreatmentView({ user, isReadOnly, riskType, year }: { user: any, isReadOnly?: boolean, riskType: 'strategis' | 'operasional', year?: string }) {
+  const currentYear = year || getSelectedYear();
+  const rowsCacheKey = getRiskRowsCacheKey(user.uid, riskType, currentYear);
 
   const [rows, setRows] = useState<any[]>(() => {
     try {
@@ -4888,7 +4952,8 @@ function RiskTreatmentView({ user, isReadOnly, riskType }: { user: any, isReadOn
       );
 
       const snapshot = await getDocs(q);
-      const data = snapshot.docs.map(doc => {
+      const allDocs = snapshot.docs.filter(doc => isDocMatchingYear(doc.data(), currentYear));
+      const data = allDocs.map(doc => {
         const d = doc.data();
         
         // Calculate Residual Risk for sorting
@@ -5115,7 +5180,8 @@ function RiskTreatmentView({ user, isReadOnly, riskType }: { user: any, isReadOn
   );
 }
 
-function RiskMapView({ user, riskType }: { user: any, riskType: 'strategis' | 'operasional' }) {
+function RiskMapView({ user, riskType, year }: { user: any, riskType: 'strategis' | 'operasional', year?: string }) {
+  const currentYear = year || getSelectedYear();
   const [rows, setRows] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -5130,7 +5196,8 @@ function RiskMapView({ user, riskType }: { user: any, riskType: 'strategis' | 'o
       );
 
       const snapshot = await getDocs(q);
-      const data = snapshot.docs.map(doc => {
+      const allDocs = snapshot.docs.filter(doc => isDocMatchingYear(doc.data(), currentYear));
+      const data = allDocs.map(doc => {
         const d = doc.data();
         
         // Use residual if available, otherwise fallback to avg initial
@@ -5325,10 +5392,11 @@ function SuggestionInput({ value, onChange, suggestions, disabled, placeholder, 
   );
 }
 
-function RiskIdentificationView({ user, isReadOnly, riskType }: { user: any, isReadOnly?: boolean, riskType: 'strategis' | 'operasional' }) {
-  const contextId = `risk_context_${user.uid}_${riskType}`;
-  const rowsCacheKey = `cached_risk_id_rows_${user.uid}_${riskType}`;
-  const contextCacheKey = `cached_context_${user.uid}_${riskType}`;
+function RiskIdentificationView({ user, isReadOnly, riskType, year }: { user: any, isReadOnly?: boolean, riskType: 'strategis' | 'operasional', year?: string }) {
+  const currentYear = year || getSelectedYear();
+  const contextId = getRiskContextDocId(user.uid, riskType, currentYear);
+  const rowsCacheKey = getRiskRowsCacheKey(user.uid, riskType, currentYear);
+  const contextCacheKey = getRiskContextCacheKey(user.uid, riskType, currentYear);
 
   const [rows, setRows] = useState<any[]>(() => {
     try {
@@ -5404,7 +5472,7 @@ function RiskIdentificationView({ user, isReadOnly, riskType }: { user: any, isR
       );
 
       const snapshot = await getDocs(q);
-      const data = snapshot.docs.map(doc => {
+      const allData = snapshot.docs.map(doc => {
         const d = doc.data();
         return {
           ...d,
@@ -5412,6 +5480,7 @@ function RiskIdentificationView({ user, isReadOnly, riskType }: { user: any, isR
           jenisRisiko: d.jenisRisiko || 'Risiko Non-Fraud'
         };
       });
+      const data = allData.filter(d => isDocMatchingYear(d, currentYear));
       // Sort by order field primarily, then createdAt
       data.sort((a: any, b: any) => {
         if (a.order !== undefined && b.order !== undefined) {
@@ -5467,7 +5536,8 @@ function RiskIdentificationView({ user, isReadOnly, riskType }: { user: any, isR
         }
       }
 
-      const initialCode = `${prefix}.26.${baseP1}.${baseP2}.${nextSeq}`;
+      const yrShort = currentYear.slice(-2);
+      const initialCode = `${prefix}.${yrShort}.${baseP1}.${baseP2}.${nextSeq}`;
       
       await setDoc(newDocRef, {
         tujuan: initTujuan || '',
@@ -5493,6 +5563,7 @@ function RiskIdentificationView({ user, isReadOnly, riskType }: { user: any, isR
         createdBy: user?.username || 'Unknown',
         createdByUid: user?.uid || '',
         riskType: riskType, 
+        year: currentYear,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       });
@@ -6542,9 +6613,10 @@ function RiskIdentificationView({ user, isReadOnly, riskType }: { user: any, isR
   );
 }
 
-function ContextSettingView({ user, isReadOnly, riskType, isAdmin = false }: { user: any, isReadOnly?: boolean, riskType: 'strategis' | 'operasional', isAdmin?: boolean }) {
-  const storageKey = `risk_context_${user.uid}_${riskType}`;
-  const cacheKey = `cached_context_${user.uid}_${riskType}`;
+function ContextSettingView({ user, isReadOnly, riskType, isAdmin = false, year }: { user: any, isReadOnly?: boolean, riskType: 'strategis' | 'operasional', isAdmin?: boolean, year?: string }) {
+  const currentYear = year || getSelectedYear();
+  const storageKey = getRiskContextDocId(user.uid, riskType, currentYear);
+  const cacheKey = getRiskContextCacheKey(user.uid, riskType, currentYear);
 
   const [formData, setFormData] = useState<any>(() => {
     try {
@@ -6561,44 +6633,46 @@ function ContextSettingView({ user, isReadOnly, riskType, isAdmin = false }: { u
 
   const fetchContextData = useCallback(async () => {
     setLoading(true);
+    const isDefault = currentYear === DEFAULT_YEAR;
     const initial = {
       namaPemda: 'Pemerintah Kabupaten Mimika',
-      tahunPenilaian: '2026',
+      tahunPenilaian: currentYear,
       periodeRenstra: 'Periode Renstra Tahun 2025-2029',
       urusanPemerintahan: 'Pengawasan Pembangunan Daerah',
-      opdDinilai: 'Inspektorat Kabupaten Mimika',
-      sumberData: 'Renstra Inspektorat Kabupaten Mimika Tahun 2025-2029',
-      tujuanStrategis: 'Mewujudkan Penguatan APIP dalam melaksanakan Tugas Pokok dan Fungsi demi tercapainya Tata Kelola Pemerintahan yang baik, bersih dan transparan yang menerapkan Sistem Administrasi Publik berbasis Digitalisasi Teknologi',
+      opdDinilai: isDefault ? 'Inspektorat Kabupaten Mimika' : (user.username || ''),
+      sumberData: isDefault ? 'Renstra Inspektorat Kabupaten Mimika Tahun 2025-2029' : `Renstra Tahun ${currentYear}`,
+      tujuanStrategis: isDefault ? 'Mewujudkan Penguatan APIP dalam melaksanakan Tugas Pokok dan Fungsi demi tercapainya Tata Kelola Pemerintahan yang baik, bersih dan transparan yang menerapkan Sistem Administrasi Publik berbasis Digitalisasi Teknologi' : '',
       informasiLain: '-',
-      ttdTempat: 'Paniai',
-      ttdBulan: 'April 2026',
+      ttdTempat: 'Timika',
+      ttdBulan: isDefault ? 'April 2026' : `Januari ${currentYear}`,
       ttdJabatan: 'Kepala Dinas XXX',
       ttdNama: '(Nama)',
       ttdPangkat: '(Pangkat)',
       ttdNip: '(NIP)',
-      sasaran: [
+      sasaran: isDefault ? [
         'Peningkatan transparansi dan akuntabilitas dalam pengelolaan keuangan daerah guna mencegah korupsi dan penyalahgunaan anggaran',
         'Penerapan sistem pengawasan berbasis teknologi seperti e-audit and e-monitoring terhadap anggaran dan proyek pemerintah.',
         'Mendorong peran aktif masyarakat dalam pengawasan pemerintahan, melalui sistem pelaporan yang mudah diakses.'
-      ],
-      ikuSasaran: [
+      ] : [''],
+      ikuSasaran: isDefault ? [
         { name: 'Indeks Pelayanan Publik', target: '1,11' },
         { name: 'Indeks Integritas Nasional', target: '64' }
-      ],
-      program: [
+      ] : [{ name: '', target: '' }],
+      program: isDefault ? [
         'Program penunjang urusan pemerintahan daerah',
         'Program penyelenggaraan pengawasan',
         'Program perumusan kebijakan, pendampingan dan asistensi'
-      ],
+      ] : [''],
       ikuProgram: [
         { name: '', target: '' },
         { name: '', target: '' },
         { name: '', target: '' }
       ],
       assessmentRows: [{ tujuan: '', sasaran: '', program: '', iku: '' }],
-      footerVenue: 'Kabupaten Paniai',
-      footerDate: 'April 2026',
-      createdByUid: user.uid
+      footerVenue: 'Kabupaten Mimika',
+      footerDate: isDefault ? 'April 2026' : `Januari ${currentYear}`,
+      createdByUid: user.uid,
+      year: currentYear
     };
 
     try {
@@ -7458,8 +7532,9 @@ function ContextSettingView({ user, isReadOnly, riskType, isAdmin = false }: { u
   );
 }
 
-function MonitoringCommunicationView({ user, isReadOnly, riskType }: { user: any, isReadOnly?: boolean, riskType: 'strategis' | 'operasional' }) {
-  const rowsCacheKey = `cached_risk_id_rows_${user.uid}_${riskType}`;
+function MonitoringCommunicationView({ user, isReadOnly, riskType, year }: { user: any, isReadOnly?: boolean, riskType: 'strategis' | 'operasional', year?: string }) {
+  const currentYear = year || getSelectedYear();
+  const rowsCacheKey = getRiskRowsCacheKey(user.uid, riskType, currentYear);
 
   const [rows, setRows] = useState<any[]>(() => {
     try {
@@ -7507,7 +7582,8 @@ function MonitoringCommunicationView({ user, isReadOnly, riskType }: { user: any
       );
 
       const snapshot = await getDocs(q);
-      const data = snapshot.docs.map(doc => {
+      const allDocs = snapshot.docs.filter(doc => isDocMatchingYear(doc.data(), currentYear));
+      const data = allDocs.map(doc => {
         const d = doc.data();
         
         // Use Residual Risk Assessment
@@ -7754,8 +7830,9 @@ function MonitoringCommunicationView({ user, isReadOnly, riskType }: { user: any
   );
 }
 
-function MonitoringPlanPIView({ user, isReadOnly, riskType }: { user: any, isReadOnly?: boolean, riskType: 'strategis' | 'operasional' }) {
-  const rowsCacheKey = `cached_risk_id_rows_${user.uid}_${riskType}`;
+function MonitoringPlanPIView({ user, isReadOnly, riskType, year }: { user: any, isReadOnly?: boolean, riskType: 'strategis' | 'operasional', year?: string }) {
+  const currentYear = year || getSelectedYear();
+  const rowsCacheKey = getRiskRowsCacheKey(user.uid, riskType, currentYear);
 
   const [rows, setRows] = useState<any[]>(() => {
     try {
@@ -7803,7 +7880,8 @@ function MonitoringPlanPIView({ user, isReadOnly, riskType }: { user: any, isRea
       );
 
       const snapshot = await getDocs(q);
-      const data = snapshot.docs.map(doc => {
+      const allDocs = snapshot.docs.filter(doc => isDocMatchingYear(doc.data(), currentYear));
+      const data = allDocs.map(doc => {
         const d = doc.data();
         
         // Use Residual Risk Assessment
@@ -8037,8 +8115,9 @@ function MonitoringPlanPIView({ user, isReadOnly, riskType }: { user: any, isRea
   );
 }
 
-function RiskOccurrenceMonitoringView({ user, isReadOnly, riskType }: { user: any, isReadOnly?: boolean, riskType: 'strategis' | 'operasional' }) {
-  const rowsCacheKey = `cached_risk_id_rows_${user.uid}_${riskType}`;
+function RiskOccurrenceMonitoringView({ user, isReadOnly, riskType, year }: { user: any, isReadOnly?: boolean, riskType: 'strategis' | 'operasional', year?: string }) {
+  const currentYear = year || getSelectedYear();
+  const rowsCacheKey = getRiskRowsCacheKey(user.uid, riskType, currentYear);
 
   const [rows, setRows] = useState<any[]>(() => {
     try {
@@ -8085,7 +8164,8 @@ function RiskOccurrenceMonitoringView({ user, isReadOnly, riskType }: { user: an
       );
 
       const snapshot = await getDocs(q);
-      const data = snapshot.docs.map(doc => {
+      const allDocs = snapshot.docs.filter(doc => isDocMatchingYear(doc.data(), currentYear));
+      const data = allDocs.map(doc => {
         const d = doc.data();
         const resD = parseFloat(d.residualDampak || 0);
         const resK = parseFloat(d.residualKemungkinan || 0);
@@ -8389,7 +8469,8 @@ function UserUploadView({
   setShowDeclaration, 
   hasConfirmedUpload, 
   setHasConfirmedUpload, 
-  onConfirm 
+  onConfirm,
+  year
 }: { 
   user: any, 
   riskType: string, 
@@ -8401,8 +8482,12 @@ function UserUploadView({
   setShowDeclaration: (v: boolean) => void, 
   hasConfirmedUpload: boolean, 
   setHasConfirmedUpload: (v: boolean) => void, 
-  onConfirm: () => void 
+  onConfirm: () => void,
+  year?: string
 }) {
+  const currentYear = year || getSelectedYear();
+  const scopedDocId = getScopedFinalDocId(user.uid, currentYear);
+
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm">
@@ -8419,7 +8504,7 @@ function UserUploadView({
             <div className="bg-blue-50 border border-blue-100 p-4 rounded-2xl inline-block mt-4">
               <p className="text-[10px] font-black text-blue-400 uppercase tracking-widest mb-1 text-left">💡 Aturan Penamaan Dokumen:</p>
               <p className="text-xs font-bold text-blue-700 text-left">
-                {riskType === 'operasional' ? 'ROO' : 'RSO'}_{user?.username || 'NAMA DINAS'}_2026
+                {riskType === 'operasional' ? 'ROO' : 'RSO'}_{user?.username || 'NAMA DINAS'}_{currentYear}
               </p>
               <p className="text-[9px] text-blue-500 mt-1 text-left italic">
                 *Pastikan nama file sesuai sebelum diunggah ke folder Drive.
@@ -8444,7 +8529,7 @@ function UserUploadView({
                       <a 
                         href={uploadLinkToUse.startsWith('http') ? uploadLinkToUse : `https://${uploadLinkToUse}`} 
                         target="_blank" 
-                        rel="noreferrer"
+                        rel="noreferrer" 
                         className="w-full group flex items-center justify-center gap-2 bg-slate-900 py-3 rounded-xl text-white font-black text-[10px] hover:bg-blue-600 transition-all uppercase tracking-widest shadow-lg shadow-slate-200"
                       >
                         UPLOAD DI SINI <ExternalLink size={12} className="group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
@@ -8452,7 +8537,7 @@ function UserUploadView({
                     </div>
 
                     {(() => {
-                      const docData = finalDocs.find(d => d.id === user.uid);
+                      const docData = finalDocs.find(d => (d.id === scopedDocId || d.id === user.uid) && isDocMatchingYear(d, currentYear));
                       const status = docData?.status || 'none';
                       const isSubmitted = status === 'pending' || status === 'verified';
 
@@ -8606,8 +8691,10 @@ function UserUploadView({
   );
 }
 
-function FinalDocumentView({ user, isAdmin, isOperator, riskType }: { user: any, isAdmin: boolean, isOperator: boolean, riskType: 'strategis' | 'operasional' }) {
+function FinalDocumentView({ user, isAdmin, isOperator, riskType, year }: { user: any, isAdmin: boolean, isOperator: boolean, riskType: 'strategis' | 'operasional', year?: string }) {
   const isSuper = isAdmin || isOperator;
+  const currentYear = year || getSelectedYear();
+  const scopedDocId = getScopedFinalDocId(user.uid, currentYear);
 
   const [docLink, setDocLink] = useState('');
   const [masterLink, setMasterLink] = useState(() => {
@@ -8645,7 +8732,7 @@ function FinalDocumentView({ user, isAdmin, isOperator, riskType }: { user: any,
 
   const [finalDocs, setFinalDocs] = useState<any[]>(() => {
     try {
-      const cached = localStorage.getItem(`cached_final_docs_${user.uid}`);
+      const cached = localStorage.getItem(`cached_final_docs_${user.uid}_${currentYear}`);
       return cached ? JSON.parse(cached) : [];
     } catch (e) {
       return [];
@@ -8688,18 +8775,18 @@ function FinalDocumentView({ user, isAdmin, isOperator, riskType }: { user: any,
         localStorage.setItem('cached_all_users', JSON.stringify(usersList));
 
         const docsSnap = await getDocs(collection(db, 'final_documents'));
-        const fdocs = docsSnap.docs.map(d => ({ ...d.data(), id: d.id }));
+        const fdocs = docsSnap.docs.map(d => ({ ...d.data(), id: d.id })).filter(d => isDocMatchingYear(d, currentYear));
         setFinalDocs(fdocs);
-        localStorage.setItem(`cached_final_docs_${user.uid}`, JSON.stringify(fdocs));
+        localStorage.setItem(`cached_final_docs_${user.uid}_${currentYear}`, JSON.stringify(fdocs));
       } else {
-        const docSnap = await getDoc(doc(db, 'final_documents', user.uid));
+        const docSnap = await getDoc(doc(db, 'final_documents', scopedDocId));
         if (docSnap.exists()) {
           const udocs = [{ ...docSnap.data(), id: docSnap.id }];
           setFinalDocs(udocs);
-          localStorage.setItem(`cached_final_docs_${user.uid}`, JSON.stringify(udocs));
+          localStorage.setItem(`cached_final_docs_${user.uid}_${currentYear}`, JSON.stringify(udocs));
         } else {
           setFinalDocs([]);
-          localStorage.removeItem(`cached_final_docs_${user.uid}`);
+          localStorage.removeItem(`cached_final_docs_${user.uid}_${currentYear}`);
         }
       }
     } catch (err) {
@@ -8771,19 +8858,21 @@ function FinalDocumentView({ user, isAdmin, isOperator, riskType }: { user: any,
     setSaving(true);
     const targetUid = user.uid;
     try {
-      await setDoc(doc(db, 'final_documents', targetUid), {
+      await setDoc(doc(db, 'final_documents', scopedDocId), {
         status: 'pending',
         updatedAt: new Date().toISOString(),
         updatedBy: targetUid,
+        uid: targetUid,
         username: user.username,
         submissionType: 'Google Drive Confirmation',
+        year: currentYear,
         note: null // Clear previous notes on re-submission
       }, { merge: true });
       setShowDeclaration(false);
       alert('Berhasil mengonfirmasi. Admin akan segera memverifikasi dokumen Anda di folder Drive.');
       fetchFinalDocuments();
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `final_documents/${targetUid}`);
+      handleFirestoreError(err, OperationType.WRITE, `final_documents/${scopedDocId}`);
     } finally {
       setSaving(false);
     }
@@ -8991,6 +9080,7 @@ function FinalDocumentView({ user, isAdmin, isOperator, riskType }: { user: any,
             hasConfirmedUpload={hasConfirmedUpload} 
             setHasConfirmedUpload={setHasConfirmedUpload} 
             onConfirm={handleConfirmUpload} 
+            year={currentYear}
           />
         ) : (
           <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm p-8">
@@ -9123,6 +9213,7 @@ function FinalDocumentView({ user, isAdmin, isOperator, riskType }: { user: any,
       hasConfirmedUpload={hasConfirmedUpload} 
       setHasConfirmedUpload={setHasConfirmedUpload} 
       onConfirm={handleConfirmUpload} 
+      year={currentYear}
     />
   );
 }
