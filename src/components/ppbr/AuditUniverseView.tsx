@@ -3,7 +3,7 @@ import { AuditUniverseItem, INITIAL_AUDIT_UNIVERSE } from './ppbrData';
 import { exportToExcel, exportToPdf } from './ppbrExport';
 import { ConfirmModal } from '../common/ConfirmModal';
 import { db } from '../../lib/firebase';
-import { doc, onSnapshot, setDoc, getDoc } from 'firebase/firestore';
+import { doc, onSnapshot, setDoc, getDoc, collection, getDocs } from 'firebase/firestore';
 import { getScopedKey, getScopedPPBRDocId, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
 import {
   Search,
@@ -25,7 +25,8 @@ import {
   RefreshCw,
   AlertCircle,
   Upload,
-  Download
+  Download,
+  Sparkles
 } from 'lucide-react';
 
 const DEFAULT_INDIKATOR_TUJUAN: Record<string, string> = {
@@ -37,6 +38,389 @@ const DEFAULT_INDIKATOR_TUJUAN: Record<string, string> = {
 };
 
 const DEFAULT_IRBAN_LIST = ['Irban I', 'Irban II', 'Irban III', 'Irban IV', 'Irbansus'];
+
+// Deteksi apakah suatu nama program bersifat umum (generic), seperti "Program Penunjang Urusan Pemerintahan"
+// Program generic ada di hampir semua dinas/badan sehingga TIDAK BOLEH ditebak sembarangan
+export const isGenericProgram = (programName: string): boolean => {
+  const lower = (programName || '').toLowerCase().trim();
+  if (!lower) return true;
+  if (lower.includes('penunjang urusan')) return true;
+  if (lower.includes('program penunjang')) return true;
+  if (lower.includes('administrasi perkantoran') && !lower.includes('dprd')) return true;
+  return false;
+};
+
+// Aturan pemetaan nama program spesifik ke OPD pengampu (Permendagri 90/2019 & Kepmendagri 050/2020)
+export const SPECIFIC_PROGRAM_OPD_RULES: Array<{
+  keywords: string[];
+  opd: string;
+}> = [
+  // 1. Pendidikan
+  {
+    keywords: ['pengelolaan pendidikan', 'kurikulum', 'pendidik dan tenaga kependidikan', 'pengendalian perizinan pendidikan', 'peserta didik', 'paud', 'sekolah dasar', 'sekolah menengah'],
+    opd: 'Dinas Pendidikan'
+  },
+  // 2. Kesehatan
+  {
+    keywords: ['upaya kesehatan', 'sediaan farmasi', 'pemberdayaan masyarakat bidang kesehatan', 'pelayanan kesehatan', 'kesehatan perorangan', 'kesehatan masyarakat', 'fasilitas pelayanan kesehatan', 'puskesmas'],
+    opd: 'Dinas Kesehatan'
+  },
+  // 3. Pekerjaan Umum dan Penataan Ruang (PUPR)
+  {
+    keywords: ['sumber daya air', 'penyelenggaraan jalan', 'penataan ruang', 'sistem penyediaan air minum', 'spam', 'penataan bangunan gedung', 'jasa konstruksi', 'drainase perkotaan', 'pengelolaan sda'],
+    opd: 'Dinas Pekerjaan Umum dan Penataan Ruang'
+  },
+  // 4. Perumahan Rakyat & Kawasan Permukiman
+  {
+    keywords: ['pengembangan perumahan', 'kawasan permukiman', 'prasarana, sarana dan utilitas umum', 'psu perumahan', 'rumah tidak layak huni', 'rtlh', 'permukiman kumuh'],
+    opd: 'Dinas Perumahan Rakyat dan Kawasan Permukiman'
+  },
+  // 5. Ketenteraman, Ketertiban Umum & Pol PP
+  {
+    keywords: ['ketenteraman dan ketertiban umum', 'tramtibum', 'penegakan peraturan daerah', 'penegakan perda', 'polisi pamong praja'],
+    opd: 'Satuan Polisi Pamong Praja'
+  },
+  // 6. Pemadam Kebakaran & Penyelamatan
+  {
+    keywords: ['penanggulangan kebakaran', 'penyelamatan kebakaran', 'pemadam kebakaran', 'damkar'],
+    opd: 'Dinas Pemadam Kebakaran dan Penyelamatan'
+  },
+  // 7. Penanggulangan Bencana
+  {
+    keywords: ['penanggulangan bencana', 'mitigasi bencana', 'prabencana', 'kedaruratan bencana'],
+    opd: 'Badan Penanggulangan Bencana Daerah'
+  },
+  // 8. Sosial
+  {
+    keywords: ['pemberdayaan sosial', 'perlindungan dan jaminan sosial', 'rehabilitasi sosial', 'penanganan bencana sosial', 'fakir miskin', 'pemerlu pelayanan kesejahteraan'],
+    opd: 'Dinas Sosial'
+  },
+  // 9. Ketenagakerjaan
+  {
+    keywords: ['pelatihan kerja dan produktivitas', 'penempatan tenaga kerja', 'hubungan industrial', 'ketenagakerjaan', 'transmigrasi'],
+    opd: 'Dinas Tenaga Kerja'
+  },
+  // 10. Pemberdayaan Perempuan & Perlindungan Anak
+  {
+    keywords: ['pengarusutamaan gender', 'perlindungan khusus anak', 'pemenuhan hak anak', 'pemberdayaan perempuan', 'kekerasan terhadap perempuan'],
+    opd: 'Dinas Pemberdayaan Perempuan dan Perlindungan Anak'
+  },
+  // 11. Ketahanan Pangan
+  {
+    keywords: ['kedaulatan dan kemandirian pangan', 'ketersediaan dan cadangan pangan', 'kerawanan pangan', 'ketahanan pangan', 'keamanan pangan daerah'],
+    opd: 'Dinas Ketahanan Pangan'
+  },
+  // 12. Lingkungan Hidup
+  {
+    keywords: ['pengendalian pencemaran', 'kerusakan lingkungan', 'keanekaragaman hayati', 'pengelolaan persampahan', 'izin lingkungan', 'lingkungan hidup', 'b3 dan limbah b3'],
+    opd: 'Dinas Lingkungan Hidup'
+  },
+  // 13. Kependudukan dan Pencatatan Sipil
+  {
+    keywords: ['pendaftaran penduduk', 'pencatatan sipil', 'administrasi kependudukan', 'adminduk', 'informasi administrasi kependudukan', 'dokumen kependudukan'],
+    opd: 'Dinas Kependudukan dan Pencatatan Sipil'
+  },
+  // 14. Pemberdayaan Masyarakat dan Desa (DPMD)
+  {
+    keywords: ['penataan desa', 'administrasi pemerintahan desa', 'kerjasama desa', 'masyarakat dan desa', 'pemberdayaan lembaga kemasyarakatan', 'pemberdayaan desa', 'dana desa'],
+    opd: 'Dinas Pemberdayaan Masyarakat dan Desa'
+  },
+  // 15. Pengendalian Penduduk & KB
+  {
+    keywords: ['pengendalian penduduk', 'keluarga berencana', 'pembinaan keluarga berencana', 'pelayanan kb'],
+    opd: 'Dinas Pengendalian Penduduk dan Keluarga Berencana'
+  },
+  // 16. Perhubungan
+  {
+    keywords: ['lalu lintas dan angkutan', 'llaj', 'pelayaran', 'perkeretaapian', 'keselamatan lalu lintas', 'terminal', 'rambu lalu lintas'],
+    opd: 'Dinas Perhubungan'
+  },
+  // 17. Komunikasi dan Informatika
+  {
+    keywords: ['informasi dan komunikasi publik', 'aplikasi informatika', 'statistik sektoral', 'persandian', 'nama domain', 'spbe', 'e-government'],
+    opd: 'Dinas Komunikasi dan Informatika'
+  },
+  // 18. Koperasi dan Usaha Kecil Menengah
+  {
+    keywords: ['pengawasan koperasi', 'penilaian kesehatan ksp', 'pendidikan perkoperasian', 'pemberdayaan usaha mikro', 'koperasi dan ukm', 'umkm'],
+    opd: 'Dinas Koperasi dan Usaha Kecil Menengah'
+  },
+  // 19. Penanaman Modal & PTSP
+  {
+    keywords: ['penanaman modal', 'pelayanan penanaman modal', 'pelayanan terpadu satu pintu', 'ptsp', 'perizinan berusaha', 'investasi daerah'],
+    opd: 'Dinas Penanaman Modal dan Pelayanan Terpadu Satu Pintu'
+  },
+  // 20. Kepemudaan dan Olahraga
+  {
+    keywords: ['daya saing kepemudaan', 'daya saing keolahragaan', 'pembinaan dan pengembangan olahraga', 'prestasi olahraga', 'pemuda dan olahraga'],
+    opd: 'Dinas Pemuda dan Olahraga'
+  },
+  // 21. Kebudayaan & Pariwisata
+  {
+    keywords: ['daya tarik destinasi pariwisata', 'pemasaran pariwisata', 'pengembangan ekonomi kreatif', 'kesenian tradisional', 'cagar budaya', 'kebudayaan daerah'],
+    opd: 'Dinas Pariwisata dan Kebudayaan'
+  },
+  // 22. Perpustakaan dan Kearsipan
+  {
+    keywords: ['pembinaan perpustakaan', 'pelestarian naskah kuno', 'pengelolaan arsip', 'kearsipan daerah', 'koleksi perpustakaan'],
+    opd: 'Dinas Perpustakaan dan Kearsipan'
+  },
+  // 23. Kelautan dan Perikanan
+  {
+    keywords: ['perikanan tangkap', 'perikanan budidaya', 'pengolahan dan pemasaran hasil perikanan', 'kelautan dan perikanan', 'nelayan kecil'],
+    opd: 'Dinas Kelautan dan Perikanan'
+  },
+  // 24. Pertanian, Peternakan & Perkebunan
+  {
+    keywords: ['sarana pertanian', 'prasarana pertanian', 'tanaman pangan', 'hortikultura', 'kesehatan hewan', 'peternakan', 'perkebunan', 'bencana pertanian'],
+    opd: 'Dinas Pertanian'
+  },
+  // 25. Perdagangan dan Perindustrian
+  {
+    keywords: ['sarana distribusi perdagangan', 'stabilisasi harga barang', 'pengembangan ekspor', 'perlindungan konsumen dan tertib niaga', 'pembangunan industri', 'metrologi legal'],
+    opd: 'Dinas Perindustrian dan Perdagangan'
+  },
+  // 26. Inspektorat
+  {
+    keywords: ['pengawasan internal', 'pembinaan pengawasan', 'pengawasan penyelenggaraan pemerintahan daerah', 'reformasi birokrasi internal'],
+    opd: 'Inspektorat Daerah'
+  },
+  // 27. Bappeda
+  {
+    keywords: ['perencanaan, pengendalian dan evaluasi pembangunan', 'koordinasi dan sinkronisasi perencanaan pembangunan', 'penelitian dan pengembangan daerah', 'litbang bappeda'],
+    opd: 'Badan Perencanaan Pembangunan Daerah'
+  },
+  // 28. BPKAD
+  {
+    keywords: ['pengelolaan keuangan daerah', 'pengelolaan barang milik daerah', 'bmd', 'aset daerah', 'perbendaharaan daerah'],
+    opd: 'Badan Pengelolaan Keuangan dan Aset Daerah'
+  },
+  // 29. Bapenda
+  {
+    keywords: ['pengelolaan pendapatan daerah', 'pajak daerah', 'retribusi daerah', 'pajak dan retribusi'],
+    opd: 'Badan Pendapatan Daerah'
+  },
+  // 30. BKPSDM
+  {
+    keywords: ['kepegawaian, pendidikan dan pelatihan', 'pengadaan, pemberhentian dan informasi kepegawaian', 'mutasi dan promosi asn', 'pengembangan kompetensi asn', 'bkpsdm', 'bkd'],
+    opd: 'Badan Kepegawaian dan Pengembangan SDM'
+  },
+  // 31. Bakesbangpol
+  {
+    keywords: ['pembinaan kesatuan bangsa', 'ketahanan ekonomi, sosial, budaya, agama', 'kesatuan bangsa dan politik', 'ormas dan wawasan kebangsaan'],
+    opd: 'Badan Kesatuan Bangsa dan Politik'
+  },
+  // 32. Sekretariat DPRD
+  {
+    keywords: ['tugas dan fungsi dprd', 'layanan administrasi dan keprotokolan dprd'],
+    opd: 'Sekretariat DPRD'
+  }
+];
+
+// Fungsi cerdas: Mencocokkan nama program spesifik dengan nama OPD
+// Prioritas 1: Dokumen Konteks RSO/ROO OPD
+// Prioritas 2: Nomenklatur Program Spesifik Standar Daerah (Permendagri 90/2019)
+export const detectOPDForProgram = (
+  programName: string,
+  rsoContexts: any[] = []
+): { opd: string; source: 'RSO' | 'ROO' | 'STANDAR' } | null => {
+  const normProg = (programName || '').toLowerCase().trim();
+  if (!normProg) return null;
+  // Jangan tebak program umum/generic (hanya untuk nama program spesifik)
+  if (isGenericProgram(normProg)) return null;
+
+  // 1. Cek dari dokumen Konteks Risiko Strategis OPD (RSO) & Risiko Operasional OPD (ROO) yang tersimpan
+  for (const ctx of rsoContexts) {
+    const opdName = (ctx.opdDinilai || ctx.namaPemda || ctx.namaOpd || ctx.organization || '').trim();
+    if (!opdName) continue;
+
+    const ctxPrograms: string[] = [];
+    if (Array.isArray(ctx.program)) {
+      ctx.program.forEach((p: any) => typeof p === 'string' && ctxPrograms.push(p));
+    } else if (typeof ctx.program === 'string') {
+      ctxPrograms.push(ctx.program);
+    }
+    if (Array.isArray(ctx.assessmentRows)) {
+      ctx.assessmentRows.forEach((r: any) => r.program && ctxPrograms.push(r.program));
+    }
+
+    const matched = ctxPrograms.some(p => {
+      const pNorm = (p || '').toLowerCase().trim();
+      return pNorm && (pNorm === normProg || pNorm.includes(normProg) || normProg.includes(pNorm));
+    });
+
+    if (matched) {
+      const isRoo = ctx.riskType === 'operasional' || (ctx.id || '').includes('operasional');
+      return { opd: opdName, source: isRoo ? 'ROO' : 'RSO' };
+    }
+  }
+
+  // 2. Cek aturan Permendagri 90/2019 berdasarkan kata kunci program spesifik
+  for (const rule of SPECIFIC_PROGRAM_OPD_RULES) {
+    const match = rule.keywords.some(kw => normProg.includes(kw));
+    if (match) {
+      return { opd: rule.opd, source: 'STANDAR' };
+    }
+  }
+
+  return null;
+};
+
+// Helper: Normalisasi data Audit Universe (Forward-fill Program & OPD untuk baris indikator tanpa nama program)
+export const normalizeAuditUniverseData = (
+  items: AuditUniverseItem[],
+  rsoContexts: any[] = []
+): { normalized: AuditUniverseItem[]; hasChanges: boolean } => {
+  if (!items || items.length === 0) return { normalized: [], hasChanges: false };
+  let hasChanges = false;
+  const result: AuditUniverseItem[] = items.map(item => ({
+    ...item,
+    irbanPengampu: item.irbanPengampu === 'Irban Khusus' ? 'Irbansus' : (item.irbanPengampu || ''),
+    indikatorSasaranRpjmd: item.indikatorSasaranRpjmd || '',
+    indikatorTujuanRpjmd: item.indikatorTujuanRpjmd || DEFAULT_INDIKATOR_TUJUAN[item.tujuanRpjmd] || ''
+  }));
+
+  // Step 1: Forward fill programRpjmd & OPD & Renstra & Faktor Risiko untuk baris yang program-nya kosong tapi merupakan indikator di bawahnya
+  for (let i = 1; i < result.length; i++) {
+    const prev = result[i - 1];
+    const curr = result[i];
+
+    const prevProg = (prev.programRpjmd || '').trim();
+    const currProg = (curr.programRpjmd || '').trim();
+
+    if (prevProg !== '' && currProg === '') {
+      const prevTujuan = (prev.tujuanRpjmd || '').trim();
+      const currTujuan = (curr.tujuanRpjmd || '').trim();
+      const prevSasaran = (prev.sasaranRpjmd || '').trim();
+      const currSasaran = (curr.sasaranRpjmd || '').trim();
+
+      const sameTujuan = !currTujuan || currTujuan === prevTujuan;
+      const sameSasaran = !currSasaran || currSasaran === prevSasaran;
+
+      if (sameTujuan && sameSasaran) {
+        curr.programRpjmd = prev.programRpjmd;
+        if (!curr.tujuanRpjmd && prev.tujuanRpjmd) curr.tujuanRpjmd = prev.tujuanRpjmd;
+        if (!curr.indikatorTujuanRpjmd && prev.indikatorTujuanRpjmd) curr.indikatorTujuanRpjmd = prev.indikatorTujuanRpjmd;
+        if (!curr.sasaranRpjmd && prev.sasaranRpjmd) curr.sasaranRpjmd = prev.sasaranRpjmd;
+        if (!curr.indikatorSasaranRpjmd && prev.indikatorSasaranRpjmd) curr.indikatorSasaranRpjmd = prev.indikatorSasaranRpjmd;
+        if (!curr.opdPengampu && prev.opdPengampu) curr.opdPengampu = prev.opdPengampu;
+        if (!curr.irbanPengampu && prev.irbanPengampu) curr.irbanPengampu = prev.irbanPengampu;
+        if (!curr.tujuanSasaranRenstra && prev.tujuanSasaranRenstra) curr.tujuanSasaranRenstra = prev.tujuanSasaranRenstra;
+        if (!curr.indikatorRenstra && prev.indikatorRenstra) curr.indikatorRenstra = prev.indikatorRenstra;
+        if (!curr.programRenstra && prev.programRenstra) curr.programRenstra = prev.programRenstra;
+        if ((!curr.anggaran || curr.anggaran === 0) && prev.anggaran) curr.anggaran = prev.anggaran;
+        if (!curr.prioritasRpjmn && prev.prioritasRpjmn) curr.prioritasRpjmn = prev.prioritasRpjmn;
+        if ((!curr.sektorUnggulan || curr.sektorUnggulan === 'Bukan sektor unggulan daerah') && prev.sektorUnggulan && prev.sektorUnggulan !== 'Bukan sektor unggulan daerah') {
+          curr.sektorUnggulan = prev.sektorUnggulan;
+        }
+        if (!curr.temuanFraudHukum && prev.temuanFraudHukum) curr.temuanFraudHukum = prev.temuanFraudHukum;
+        if (!curr.isuTerkini && prev.isuTerkini) curr.isuTerkini = prev.isuTerkini;
+        hasChanges = true;
+      }
+    }
+  }
+
+  // Step 1.5: Auto-fill OPD untuk nama program spesifik yang belum memiliki OPD
+  result.forEach(item => {
+    const prog = (item.programRpjmd || '').trim();
+    if (prog && (!item.opdPengampu || item.opdPengampu.trim() === '')) {
+      const detected = detectOPDForProgram(prog, rsoContexts);
+      if (detected) {
+        item.opdPengampu = detected.opd;
+        hasChanges = true;
+      }
+    }
+  });
+
+  // Step 2: Unify OPD, Irban, Renstra & Faktor Risiko untuk setiap Program RPJMD yang sama
+  interface ProgramCanonicalData {
+    opdPengampu?: string;
+    irbanPengampu?: string;
+    tujuanSasaranRenstra?: string;
+    indikatorRenstra?: string;
+    programRenstra?: string;
+    anggaran?: number;
+    prioritasRpjmn?: string;
+    sektorUnggulan?: string;
+    temuanFraudHukum?: string;
+    isuTerkini?: string;
+  }
+  const programCanonicalMap = new Map<string, ProgramCanonicalData>();
+
+  result.forEach(item => {
+    const prog = (item.programRpjmd || '').trim().toLowerCase();
+    if (!prog) return;
+
+    let canon = programCanonicalMap.get(prog);
+    if (!canon) {
+      canon = {};
+      programCanonicalMap.set(prog, canon);
+    }
+
+    if (!canon.opdPengampu && (item.opdPengampu || '').trim()) canon.opdPengampu = item.opdPengampu.trim();
+    if (!canon.irbanPengampu && (item.irbanPengampu || '').trim()) canon.irbanPengampu = item.irbanPengampu.trim();
+    if (!canon.tujuanSasaranRenstra && (item.tujuanSasaranRenstra || '').trim()) canon.tujuanSasaranRenstra = item.tujuanSasaranRenstra.trim();
+    if (!canon.indikatorRenstra && (item.indikatorRenstra || '').trim()) canon.indikatorRenstra = item.indikatorRenstra.trim();
+    if (!canon.programRenstra && (item.programRenstra || '').trim()) canon.programRenstra = item.programRenstra.trim();
+    if ((!canon.anggaran || canon.anggaran === 0) && item.anggaran) canon.anggaran = Number(item.anggaran);
+    if (!canon.prioritasRpjmn && (item.prioritasRpjmn || '').trim()) canon.prioritasRpjmn = item.prioritasRpjmn.trim();
+    if ((!canon.sektorUnggulan || canon.sektorUnggulan === 'Bukan sektor unggulan daerah') && item.sektorUnggulan && item.sektorUnggulan !== 'Bukan sektor unggulan daerah') {
+      canon.sektorUnggulan = item.sektorUnggulan;
+    }
+    if (!canon.temuanFraudHukum && (item.temuanFraudHukum || '').trim()) canon.temuanFraudHukum = item.temuanFraudHukum.trim();
+    if (!canon.isuTerkini && (item.isuTerkini || '').trim()) canon.isuTerkini = item.isuTerkini.trim();
+  });
+
+  result.forEach(item => {
+    const prog = (item.programRpjmd || '').trim().toLowerCase();
+    if (!prog) return;
+    const canon = programCanonicalMap.get(prog);
+    if (!canon) return;
+
+    if (canon.opdPengampu && (item.opdPengampu || '').trim() !== canon.opdPengampu) {
+      item.opdPengampu = canon.opdPengampu;
+      hasChanges = true;
+    }
+    if (canon.irbanPengampu && (item.irbanPengampu || '').trim() !== canon.irbanPengampu) {
+      item.irbanPengampu = canon.irbanPengampu;
+      hasChanges = true;
+    }
+    if (canon.tujuanSasaranRenstra && (item.tujuanSasaranRenstra || '').trim() !== canon.tujuanSasaranRenstra) {
+      item.tujuanSasaranRenstra = canon.tujuanSasaranRenstra;
+      hasChanges = true;
+    }
+    if (canon.indikatorRenstra && (item.indikatorRenstra || '').trim() !== canon.indikatorRenstra) {
+      item.indikatorRenstra = canon.indikatorRenstra;
+      hasChanges = true;
+    }
+    if (canon.programRenstra && (item.programRenstra || '').trim() !== canon.programRenstra) {
+      item.programRenstra = canon.programRenstra;
+      hasChanges = true;
+    }
+    if (canon.anggaran !== undefined && (item.anggaran || 0) !== canon.anggaran) {
+      item.anggaran = canon.anggaran;
+      hasChanges = true;
+    }
+    if (canon.prioritasRpjmn && (item.prioritasRpjmn || '').trim() !== canon.prioritasRpjmn) {
+      item.prioritasRpjmn = canon.prioritasRpjmn;
+      hasChanges = true;
+    }
+    if (canon.sektorUnggulan && item.sektorUnggulan !== canon.sektorUnggulan) {
+      item.sektorUnggulan = canon.sektorUnggulan;
+      hasChanges = true;
+    }
+    if (canon.temuanFraudHukum && (item.temuanFraudHukum || '').trim() !== canon.temuanFraudHukum) {
+      item.temuanFraudHukum = canon.temuanFraudHukum;
+      hasChanges = true;
+    }
+    if (canon.isuTerkini && (item.isuTerkini || '').trim() !== canon.isuTerkini) {
+      item.isuTerkini = canon.isuTerkini;
+      hasChanges = true;
+    }
+  });
+
+  return { normalized: result, hasChanges };
+};
 
 export interface AuditUniverseViewProps {
   isAdmin?: boolean;
@@ -66,26 +450,28 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          return parsed.map((item: any) => ({
-            ...item,
-            irbanPengampu: item.irbanPengampu === 'Irban Khusus' ? 'Irbansus' : (item.irbanPengampu || ''),
-            indikatorSasaranRpjmd: item.indikatorSasaranRpjmd || '',
-            indikatorTujuanRpjmd: item.indikatorTujuanRpjmd || DEFAULT_INDIKATOR_TUJUAN[item.tujuanRpjmd] || ''
-          }));
+          const { normalized } = normalizeAuditUniverseData(parsed);
+          return normalized;
         }
       } catch (e) {
         console.error('Failed to parse ' + storageKey, e);
       }
     }
     // Only return initial demo/seed data for 2026. For 2027 and other years, start empty!
-    return currentYear === DEFAULT_YEAR ? INITIAL_AUDIT_UNIVERSE : [];
+    const base = currentYear === DEFAULT_YEAR ? INITIAL_AUDIT_UNIVERSE : [];
+    const { normalized } = normalizeAuditUniverseData(base);
+    return normalized;
   });
 
+  const [toastNotice, setToastNotice] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterIrban, setFilterIrban] = useState('ALL');
   const [filterOPD, setFilterOPD] = useState('ALL');
   const [filterProgram, setFilterProgram] = useState('ALL');
   const [mergeViewMode, setMergeViewMode] = useState<boolean>(true);
+
+  // RSO & ROO Contexts (untuk deteksi otomatis OPD dan program terkait)
+  const [rsoContexts, setRsoContexts] = useState<any[]>([]);
 
   // Cloud Real-time Synchronization State
   const [cloudStatus, setCloudStatus] = useState<'synced' | 'saving' | 'offline' | 'error'>('synced');
@@ -137,6 +523,61 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
     return DEFAULT_IRBAN_LIST;
   });
 
+  // Load RSO dan ROO contexts dari Firestore & LocalStorage untuk auto-fill nama dinas
+  useEffect(() => {
+    let isMounted = true;
+    const loadContexts = async () => {
+      const loaded: any[] = [];
+      // 1. Ambil dari localStorage cached_context_*
+      try {
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith('cached_context_')) {
+            const raw = localStorage.getItem(key);
+            if (raw) {
+              const c = JSON.parse(raw);
+              if (c && (c.opdDinilai || c.namaPemda || c.program || c.assessmentRows)) {
+                loaded.push({ ...c, id: key.replace('cached_context_', 'risk_context_') });
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('Load local cached context warning:', e);
+      }
+
+      // 2. Ambil dari Firestore collection risk_context
+      try {
+        const snap = await getDocs(collection(db, 'risk_context'));
+        snap.forEach(docSnap => {
+          const d = docSnap.data();
+          if (d && (d.opdDinilai || d.namaPemda || d.program || d.assessmentRows)) {
+            loaded.push({ ...d, id: docSnap.id });
+          }
+        });
+      } catch (e) {
+        console.warn('Load firestore risk_context warning:', e);
+      }
+
+      if (isMounted) {
+        setRsoContexts(loaded);
+        // Langsung auto-fill dan normalisasi seluruh baris data yang ada tanpa perlu klik manual
+        setData(prevData => {
+          const { normalized, hasChanges } = normalizeAuditUniverseData(prevData, loaded);
+          if (hasChanges) {
+            handleSaveData(normalized, true);
+          }
+          return normalized;
+        });
+      }
+    };
+
+    loadContexts();
+    return () => {
+      isMounted = false;
+    };
+  }, [currentYear]);
+
   // Real-time listener: Listen to Firestore Cloud Database updates
   useEffect(() => {
     // 1. Subscribe to Audit Universe in Firestore
@@ -146,14 +587,9 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
         const snapData = snap.data();
         if (snapData && Array.isArray(snapData.items)) {
           isRemoteUpdateRef.current = true;
-          const mapped = snapData.items.map((item: any) => ({
-            ...item,
-            irbanPengampu: item.irbanPengampu === 'Irban Khusus' ? 'Irbansus' : (item.irbanPengampu || ''),
-            indikatorSasaranRpjmd: item.indikatorSasaranRpjmd || '',
-            indikatorTujuanRpjmd: item.indikatorTujuanRpjmd || DEFAULT_INDIKATOR_TUJUAN[item.tujuanRpjmd] || ''
-          }));
-          setData(mapped);
-          localStorage.setItem(storageKey, JSON.stringify(mapped));
+          const { normalized, hasChanges } = normalizeAuditUniverseData(snapData.items);
+          setData(normalized);
+          localStorage.setItem(storageKey, JSON.stringify(normalized));
           setCloudStatus('synced');
           if (snapData.updatedAt) {
             try {
@@ -161,6 +597,12 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
             } catch (_) {
               setLastSyncedTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
             }
+          }
+          if (hasChanges) {
+            setDoc(auDocRef, {
+              items: normalized,
+              updatedAt: new Date().toISOString()
+            }, { merge: true }).catch(err => console.warn('Auto-save normalized data to cloud:', err));
           }
           setTimeout(() => {
             isRemoteUpdateRef.current = false;
@@ -357,7 +799,7 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
   // Dual Persistence: Save to local state + localStorage + Firestore Cloud
   const handleSaveData = (newData: AuditUniverseItem[], immediateCloud = false) => {
     setData(newData);
-    localStorage.setItem('ppbr_audit_universe', JSON.stringify(newData));
+    localStorage.setItem(storageKey, JSON.stringify(newData));
 
     // If update originated from remote snapshot, do not re-emit to cloud
     if (isRemoteUpdateRef.current) return;
@@ -370,7 +812,7 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
     const doCloudSave = async () => {
       try {
         const nowIso = new Date().toISOString();
-        await setDoc(doc(db, 'ppbr_data', 'audit_universe'), {
+        await setDoc(doc(db, 'ppbr_data', docId), {
           items: newData,
           updatedAt: nowIso
         }, { merge: true });
@@ -394,7 +836,7 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
     setIsManualSyncing(true);
     setCloudStatus('saving');
     try {
-      const snap = await getDoc(doc(db, 'ppbr_data', 'audit_universe'));
+      const snap = await getDoc(doc(db, 'ppbr_data', docId));
       if (snap.exists() && Array.isArray(snap.data()?.items)) {
         const mapped = snap.data().items.map((item: any) => ({
           ...item,
@@ -402,10 +844,11 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
           indikatorSasaranRpjmd: item.indikatorSasaranRpjmd || '',
           indikatorTujuanRpjmd: item.indikatorTujuanRpjmd || DEFAULT_INDIKATOR_TUJUAN[item.tujuanRpjmd] || ''
         }));
-        setData(mapped);
-        localStorage.setItem('ppbr_audit_universe', JSON.stringify(mapped));
+        const { normalized } = normalizeAuditUniverseData(mapped);
+        setData(normalized);
+        localStorage.setItem(storageKey, JSON.stringify(normalized));
       } else {
-        await setDoc(doc(db, 'ppbr_data', 'audit_universe'), {
+        await setDoc(doc(db, 'ppbr_data', docId), {
           items: data,
           updatedAt: new Date().toISOString()
         }, { merge: true });
@@ -503,32 +946,72 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
 
   // Direct cell update
   const handleCellChange = (id: string, field: keyof AuditUniverseItem, value: any) => {
+    let detectedOpdName: string | null = null;
     const updated = data.map(item => {
       if (item.id === id) {
-        return {
+        const next: AuditUniverseItem = {
           ...item,
           [field]: field === 'anggaran' ? Number(value) || 0 : value
         };
+        // Auto-detect OPD jika nama program spesifik diinput/diubah dan OPD belum terisi
+        if (field === 'programRpjmd' && (!item.opdPengampu || item.opdPengampu.trim() === '')) {
+          const detected = detectOPDForProgram(value, rsoContexts);
+          if (detected) {
+            next.opdPengampu = detected.opd;
+            detectedOpdName = detected.opd;
+            // Wariskan juga Irban jika OPD ini sudah pernah dipetakan ke Irban tertentu di baris lain
+            if (!next.irbanPengampu) {
+              const matchWithIrban = data.find(d => (d.opdPengampu || '').trim().toLowerCase() === detected.opd.toLowerCase() && d.irbanPengampu);
+              if (matchWithIrban) next.irbanPengampu = matchWithIrban.irbanPengampu;
+            }
+          }
+        }
+        return next;
       }
       return item;
     });
     handleSaveData(updated);
+    if (detectedOpdName) {
+      setToastNotice(`OPD otomatis terisi: "${detectedOpdName}"`);
+      setTimeout(() => setToastNotice(null), 3000);
+    }
   };
 
   // Update merged cell across identical group
   const handleMergedCellChange = (
-    field: 'tujuanRpjmd' | 'indikatorTujuanRpjmd' | 'sasaranRpjmd' | 'indikatorSasaranRpjmd',
+    field: keyof AuditUniverseItem,
     groupIndices: number[],
-    value: string
+    value: any
   ) => {
     const idsToUpdate = new Set(groupIndices.map(idx => filteredData[idx]?.id).filter(Boolean));
+    let detectedOpdName: string | null = null;
     const updated = data.map(item => {
       if (idsToUpdate.has(item.id)) {
-        return { ...item, [field]: value };
+        const next: AuditUniverseItem = {
+          ...item,
+          [field]: field === 'anggaran' ? Number(value) || 0 : value
+        };
+        // Auto-detect OPD jika nama program spesifik diinput/diubah dan OPD belum terisi
+        if (field === 'programRpjmd' && (!item.opdPengampu || item.opdPengampu.trim() === '')) {
+          const detected = detectOPDForProgram(value, rsoContexts);
+          if (detected) {
+            next.opdPengampu = detected.opd;
+            detectedOpdName = detected.opd;
+            if (!next.irbanPengampu) {
+              const matchWithIrban = data.find(d => (d.opdPengampu || '').trim().toLowerCase() === detected.opd.toLowerCase() && d.irbanPengampu);
+              if (matchWithIrban) next.irbanPengampu = matchWithIrban.irbanPengampu;
+            }
+          }
+        }
+        return next;
       }
       return item;
     });
     handleSaveData(updated);
+    if (detectedOpdName) {
+      setToastNotice(`OPD otomatis terisi: "${detectedOpdName}"`);
+      setTimeout(() => setToastNotice(null), 3000);
+    }
   };
 
   // Add new single row
@@ -716,6 +1199,138 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
     handleSaveData(renumbered);
   };
 
+  // Add a new Indicator row under an existing Program RPJMD (Program and OPD and Renstra remain merged)
+  const handleAddIndikatorUnderProgram = (
+    tujuan: string,
+    sasaran: string,
+    indSasaran: string,
+    indTujuan: string,
+    program: string,
+    opd: string,
+    irban: string,
+    afterIndex: number
+  ) => {
+    const targetItem = filteredData[afterIndex];
+    const newRow: AuditUniverseItem = {
+      id: `au-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      no: data.length + 1,
+      tujuanRpjmd: tujuan,
+      indikatorTujuanRpjmd: indTujuan || '',
+      sasaranRpjmd: sasaran,
+      indikatorSasaranRpjmd: indSasaran || '',
+      programRpjmd: program,
+      indikatorProgramRpjmd: '',
+      opdPengampu: opd,
+      irbanPengampu: irban || targetItem?.irbanPengampu || defaultNewRowIrban,
+      tujuanSasaranRenstra: targetItem?.tujuanSasaranRenstra || '',
+      indikatorRenstra: targetItem?.indikatorRenstra || '',
+      programRenstra: targetItem?.programRenstra || '',
+      indikatorProgramRenstra: '',
+      anggaran: targetItem?.anggaran ?? 0,
+      prioritasRpjmn: targetItem?.prioritasRpjmn || '',
+      sektorUnggulan: targetItem?.sektorUnggulan || 'Bukan sektor unggulan daerah',
+      temuanFraudHukum: targetItem?.temuanFraudHukum || '',
+      isuTerkini: targetItem?.isuTerkini || ''
+    };
+    const originalIndex = data.findIndex(d => d.id === targetItem?.id);
+    const updated = [...data];
+    if (originalIndex !== -1) {
+      updated.splice(originalIndex + 1, 0, newRow);
+    } else {
+      updated.push(newRow);
+    }
+    const renumbered = updated.map((item, idx) => ({ ...item, no: idx + 1 }));
+    handleSaveData(renumbered);
+    setToastNotice(`Berhasil menambahkan baris indikator baru untuk program "${program || targetItem?.programRenstra || 'RPJMD'}"`);
+    setTimeout(() => setToastNotice(null), 3500);
+  };
+
+  // Hapus hanya satu baris indikator dalam program yang dimerge
+  const handleDeleteIndicatorRow = (item: AuditUniverseItem) => {
+    const indicatorName = item.indikatorProgramRpjmd || item.indikatorProgramRenstra || `Baris No. ${item.no}`;
+    setConfirmModal({
+      isOpen: true,
+      title: 'Hapus Baris Indikator Ini?',
+      message: `Apakah Anda yakin ingin menghapus baris indikator: "${indicatorName}"? Baris indikator lain pada program ini akan tetap tersimpan.`,
+      confirmText: 'Ya, Hapus Indikator',
+      variant: 'danger',
+      onConfirm: () => {
+        const updated = data
+          .filter(d => d.id !== item.id)
+          .map((d, idx) => ({ ...d, no: idx + 1 }));
+        handleSaveData(updated);
+      }
+    });
+  };
+
+  // Hapus seluruh program beserta seluruh indikatornya
+  const requestDeleteProgram = (indices: number[], programName: string) => {
+    const itemsToDelete = indices.map(idx => filteredData[idx]).filter(Boolean);
+    const idsToDelete = new Set(itemsToDelete.map(d => d.id));
+    setConfirmModal({
+      isOpen: true,
+      title: `Hapus Seluruh Program (${idsToDelete.size} Baris)?`,
+      message: `Apakah Anda yakin ingin menghapus program "${programName}" beserta seluruh ${idsToDelete.size} baris indikator di dalamnya?`,
+      confirmText: 'Ya, Hapus Program',
+      variant: 'danger',
+      onConfirm: () => {
+        const updated = data
+          .filter(d => !idsToDelete.has(d.id))
+          .map((d, idx) => ({ ...d, no: idx + 1 }));
+        handleSaveData(updated);
+      }
+    });
+  };
+
+  // Merge Program & OPD otomatis untuk baris indikator tanpa nama program di bawahnya
+  const handleRunNormalizeAndMerge = () => {
+    const { normalized, hasChanges } = normalizeAuditUniverseData(data, rsoContexts);
+    if (!hasChanges) {
+      setToastNotice('Data Program & OPD sudah optimal dan terorganisir rapi.');
+      setTimeout(() => setToastNotice(null), 3000);
+      return;
+    }
+    handleSaveData(normalized, true);
+    setToastNotice('Berhasil merapikan & mengisi otomatis Program dan OPD!');
+    setTimeout(() => setToastNotice(null), 4000);
+  };
+
+  // Fitur Khusus: Isi otomatis nama Dinas/OPD yang masih kosong berdasarkan RSO/ROO & Nomenklatur Program
+  const handleAutoFillOPDFromRSO = () => {
+    let filledCount = 0;
+    const updated = data.map(item => {
+      const curProg = (item.programRpjmd || '').trim();
+      const curOpd = (item.opdPengampu || '').trim();
+      if (curProg && !curOpd) {
+        const detected = detectOPDForProgram(curProg, rsoContexts);
+        if (detected) {
+          filledCount++;
+          const next = {
+            ...item,
+            opdPengampu: detected.opd
+          };
+          if (!next.irbanPengampu) {
+            const matchWithIrban = data.find(d => (d.opdPengampu || '').trim().toLowerCase() === detected.opd.toLowerCase() && d.irbanPengampu);
+            if (matchWithIrban) next.irbanPengampu = matchWithIrban.irbanPengampu;
+          }
+          return next;
+        }
+      }
+      return item;
+    });
+
+    if (filledCount === 0) {
+      setToastNotice('Seluruh nama OPD untuk program spesifik sudah terisi dengan baik.');
+      setTimeout(() => setToastNotice(null), 3500);
+      return;
+    }
+
+    const { normalized } = normalizeAuditUniverseData(updated, rsoContexts);
+    handleSaveData(normalized, true);
+    setToastNotice(`Berhasil mengisi otomatis ${filledCount} nama Dinas/OPD berdasarkan RSO/ROO!`);
+    setTimeout(() => setToastNotice(null), 4000);
+  };
+
   // Add multiple rows
   const handleAddMultipleRows = (count: number) => {
     const newRows: AuditUniverseItem[] = [];
@@ -900,6 +1515,8 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
     const sasaranIndices: { [index: number]: number[] } = {};
     const indikatorSpan: { [index: number]: number } = {};
     const indikatorIndices: { [index: number]: number[] } = {};
+    const programSpan: { [index: number]: number } = {};
+    const programIndices: { [index: number]: number[] } = {};
 
     if (!mergeViewMode) {
       return {
@@ -910,7 +1527,9 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
         sasaranSpan,
         sasaranIndices,
         indikatorSpan,
-        indikatorIndices
+        indikatorIndices,
+        programSpan,
+        programIndices
       };
     }
 
@@ -1009,6 +1628,35 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
             for (let ik = indStart + 1; ik < indEnd; ik++) {
               indikatorSpan[ik] = 0;
             }
+
+            // Inside this indikator group, calculate program span (1 Program = 1 OPD)
+            let pStart = indStart;
+            while (pStart < indEnd) {
+              const curProg = (filteredData[pStart].programRpjmd || '').trim();
+              let pEnd = pStart + 1;
+              const pIndices = [pStart];
+
+              if (curProg !== '') {
+                while (
+                  pEnd < indEnd &&
+                  (filteredData[pEnd].programRpjmd || '').trim() === curProg
+                ) {
+                  pIndices.push(pEnd);
+                  pEnd++;
+                }
+              }
+
+              const progSpan = pEnd - pStart;
+              programSpan[pStart] = progSpan;
+              programIndices[pStart] = pIndices;
+
+              for (let pk = pStart + 1; pk < pEnd; pk++) {
+                programSpan[pk] = 0; // mark as hidden
+              }
+
+              pStart = pEnd;
+            }
+
             indStart = indEnd;
           }
 
@@ -1029,11 +1677,24 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
       sasaranSpan,
       sasaranIndices,
       indikatorSpan,
-      indikatorIndices
+      indikatorIndices,
+      programSpan,
+      programIndices
     };
   }, [filteredData, mergeViewMode]);
 
-  const totalAnggaran = data.reduce((acc, curr) => acc + (Number(curr.anggaran) || 0), 0);
+  // Hitung total anggaran unik per program (tidak menggelembung jika 1 program punya banyak indikator)
+  const totalAnggaran = useMemo(() => {
+    const seenPrograms = new Set<string>();
+    return data.reduce((acc, curr) => {
+      const prog = (curr.programRpjmd || '').trim().toLowerCase();
+      const opd = (curr.opdPengampu || '').trim().toLowerCase();
+      const key = prog ? `${opd}|||${prog}` : curr.id;
+      if (seenPrograms.has(key)) return acc;
+      seenPrograms.add(key);
+      return acc + (Number(curr.anggaran) || 0);
+    }, 0);
+  }, [data]);
 
   // Export to Excel
   const handleExportExcel = () => {
@@ -1083,6 +1744,7 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
       'Sasaran RPJMD',
       'Indikator Sasaran',
       'Program RPJMD',
+      'Indikator Program',
       'OPD Pengampu',
       'Irban',
       'Program Renstra',
@@ -1099,6 +1761,7 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
       d.sasaranRpjmd || '-',
       d.indikatorSasaranRpjmd || '-',
       d.programRpjmd || '-',
+      d.indikatorProgramRpjmd || '-',
       d.opdPengampu || '-',
       d.irbanPengampu || '-',
       d.programRenstra || '-',
@@ -1186,6 +1849,26 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
             >
               {mergeViewMode ? <GitMerge className="w-4 h-4 text-blue-200" /> : <Split className="w-4 h-4" />}
               <span>{mergeViewMode ? 'Merge Baris: ON' : 'Merge Baris: OFF'}</span>
+            </button>
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={handleRunNormalizeAndMerge}
+                className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-teal-300 border border-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition"
+                title="Gabungkan otomatis baris indikator tanpa nama program ke Program & OPD di atasnya"
+              >
+                <GitMerge className="w-4 h-4 text-teal-400" />
+                <span>Merge Program & OPD</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handleAutoFillOPDFromRSO}
+              className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition"
+              title="Isi otomatis nama Dinas/OPD yang masih kosong untuk program spesifik berdasarkan RSO/ROO dan Nomenklatur"
+            >
+              <Sparkles className="w-4 h-4 text-amber-400" />
+              <span>Auto-Fill OPD (RSO)</span>
             </button>
             <button
               onClick={handleExportExcel}
@@ -1523,6 +2206,10 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
                   const showIndikator = indSpan > 0;
                   const indIndices = spanInfo.indikatorIndices[index] || [index];
 
+                  const progSpan = spanInfo.programSpan?.[index] ?? 1;
+                  const showProgram = progSpan > 0;
+                  const progIndices = spanInfo.programIndices?.[index] || [index];
+
                   return (
                     <tr
                       key={item.id}
@@ -1749,209 +2436,493 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
                         </td>
                       )}
 
-                      {/* RPJMD: Program RPJMD */}
-                      <td className="p-1.5 border-r border-slate-200 bg-blue-50/20">
-                        <textarea
-                          rows={2}
-                          value={item.programRpjmd || ''}
-                          onChange={e => handleCellChange(item.id, 'programRpjmd', e.target.value)}
-                          placeholder="Nama Program RPJMD..."
-                          className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-blue-300 focus:border-blue-500 rounded-md text-xs font-bold text-blue-950 resize-y focus:outline-hidden transition leading-relaxed"
-                        />
-                      </td>
-
-                      {/* RPJMD: Indikator Program */}
-                      <td className="p-1.5 border-r border-slate-200">
-                        <textarea
-                          rows={2}
-                          value={item.indikatorProgramRpjmd || ''}
-                          onChange={e => handleCellChange(item.id, 'indikatorProgramRpjmd', e.target.value)}
-                          placeholder="Indikator Program..."
-                          className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-blue-500 rounded-md text-xs resize-y focus:outline-hidden transition leading-relaxed text-slate-800"
-                        />
-                      </td>
-
-                      {/* RPJMD: OPD/Unit Pengampu */}
-                      <td className="p-1.5 border-r border-slate-200 bg-slate-50/40">
-                        <input
-                          type="text"
-                          value={item.opdPengampu || ''}
-                          onChange={e => handleCellChange(item.id, 'opdPengampu', e.target.value)}
-                          placeholder="Contoh: Dinas Pendidikan"
-                          className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-blue-500 rounded-md text-xs font-semibold text-slate-900 focus:outline-hidden transition"
-                        />
-                      </td>
-
-                      {/* RENSTRA: Irban Pengampu */}
-                      <td className="p-1.5 text-center border-r border-slate-200">
-                        <select
-                          value={item.irbanPengampu || ''}
-                          onChange={e => {
-                            if (e.target.value === '__ADD_NEW__') {
-                              openAddIrban('row', item.id);
-                            } else {
-                              handleCellChange(item.id, 'irbanPengampu', e.target.value);
-                            }
-                          }}
-                          className={`w-full p-1.5 rounded-md text-xs transition cursor-pointer focus:outline-hidden ${
-                            !item.irbanPengampu || item.irbanPengampu.trim() === ''
-                              ? 'bg-amber-50 text-amber-800 border border-amber-300 font-bold focus:ring-1 focus:ring-amber-500'
-                              : 'bg-indigo-50/60 hover:bg-white focus:bg-white border border-indigo-200 font-semibold text-indigo-900 focus:ring-1 focus:ring-indigo-500'
+                      {/* RPJMD: Program RPJMD (Merged if identical within Indikator Sasaran) */}
+                      {showProgram && (
+                        <td
+                          rowSpan={progSpan}
+                          className={`p-2 border-r border-slate-200 align-top min-w-[220px] ${
+                            progSpan > 1 ? 'bg-blue-50/40' : 'bg-blue-50/20'
                           }`}
                         >
-                          <option value="">-- Belum Diisi --</option>
-                          {allIrbanOptions.map(irban => (
-                            <option key={irban} value={irban}>
-                              {irban}
-                            </option>
-                          ))}
-                          <option value="__ADD_NEW__" className="text-blue-600 font-bold bg-blue-50">
-                            + Tambahkan Irban...
-                          </option>
-                        </select>
-                      </td>
+                          <div className="flex flex-col h-full justify-between gap-1.5">
+                            <div>
+                              <textarea
+                                rows={Math.max(2, progSpan * 2)}
+                                value={item.programRpjmd || ''}
+                                onChange={e => {
+                                  if (progSpan > 1) {
+                                    handleMergedCellChange('programRpjmd', progIndices, e.target.value);
+                                  } else {
+                                    handleCellChange(item.id, 'programRpjmd', e.target.value);
+                                  }
+                                }}
+                                placeholder="Nama Program RPJMD..."
+                                className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-blue-300 focus:border-blue-500 rounded-md text-xs font-bold text-blue-950 resize-y focus:outline-hidden transition leading-relaxed"
+                              />
+                              {progSpan > 1 && (
+                                <div className="text-[10px] text-blue-700 font-medium px-1.5 py-0.5 bg-blue-100/60 rounded inline-flex items-center gap-1 mt-1">
+                                  <Layers className="w-3 h-3 text-blue-600" />
+                                  <span>{progSpan} Indikator</span>
+                                </div>
+                              )}
+                            </div>
 
-                      {/* RENSTRA: Tujuan/ Sasaran dalam Renstra */}
-                      <td className="p-1.5 border-r border-slate-200">
-                        <textarea
-                          rows={2}
-                          value={item.tujuanSasaranRenstra || ''}
-                          onChange={e => handleCellChange(item.id, 'tujuanSasaranRenstra', e.target.value)}
-                          placeholder="Tujuan/Sasaran Renstra..."
-                          className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-indigo-500 rounded-md text-xs resize-y focus:outline-hidden transition leading-relaxed text-slate-800"
-                        />
-                      </td>
+                            {/* Tombol tambah Indikator Program baru di bawah program ini */}
+                            <div className="pt-1.5 border-t border-blue-200/50 flex flex-wrap items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleAddIndikatorUnderProgram(
+                                    item.tujuanRpjmd || '',
+                                    item.sasaranRpjmd || '',
+                                    item.indikatorSasaranRpjmd || '',
+                                    item.indikatorTujuanRpjmd || '',
+                                    item.programRpjmd || '',
+                                    item.opdPengampu || '',
+                                    item.irbanPengampu || '',
+                                    index + progSpan - 1
+                                  )
+                                }
+                                className="text-[10px] text-teal-700 hover:text-teal-800 font-semibold px-2 py-0.5 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded self-start flex items-center gap-1 transition shadow-2xs"
+                                title="Tambah baris Indikator Program baru untuk program ini (Program & OPD tetap digabung)"
+                              >
+                                <Plus className="w-3 h-3" />
+                                <span>+ Indikator</span>
+                              </button>
+                            </div>
+                          </div>
+                        </td>
+                      )}
 
-                      {/* RENSTRA: Indikator Tujuan/ Sasaran */}
-                      <td className="p-1.5 border-r border-slate-200">
-                        <textarea
-                          rows={2}
-                          value={item.indikatorRenstra || ''}
-                          onChange={e => handleCellChange(item.id, 'indikatorRenstra', e.target.value)}
-                          placeholder="Indikator Sasaran Renstra..."
-                          className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-indigo-500 rounded-md text-xs resize-y focus:outline-hidden transition leading-relaxed text-slate-800"
-                        />
-                      </td>
-
-                      {/* RENSTRA: Program */}
-                      <td className="p-1.5 border-r border-slate-200 bg-indigo-50/20">
-                        <textarea
-                          rows={2}
-                          value={item.programRenstra || ''}
-                          onChange={e => handleCellChange(item.id, 'programRenstra', e.target.value)}
-                          placeholder="Nama Program Renstra OPD..."
-                          className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-indigo-300 focus:border-indigo-500 rounded-md text-xs font-semibold text-indigo-950 resize-y focus:outline-hidden transition leading-relaxed"
-                        />
-                      </td>
-
-                      {/* RENSTRA: Indikator Program */}
-                      <td className="p-1.5 border-r border-slate-200">
-                        <textarea
-                          rows={2}
-                          value={item.indikatorProgramRenstra || ''}
-                          onChange={e => handleCellChange(item.id, 'indikatorProgramRenstra', e.target.value)}
-                          placeholder="Indikator Program Renstra..."
-                          className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-indigo-500 rounded-md text-xs resize-y focus:outline-hidden transition leading-relaxed text-slate-800"
-                        />
-                      </td>
-
-                      {/* RENSTRA: Anggaran Program */}
-                      <td className="p-1.5 text-right border-r border-slate-200 bg-emerald-50/20">
-                        <input
-                          type="number"
-                          min={0}
-                          step={1000000}
-                          value={item.anggaran ?? 0}
-                          onChange={e => handleCellChange(item.id, 'anggaran', e.target.value)}
-                          placeholder="0"
-                          className="w-full p-2 text-right bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-emerald-300 focus:border-emerald-500 rounded-md text-xs font-bold text-emerald-800 focus:outline-hidden transition"
-                        />
-                      </td>
-
-                      {/* Program Prioritas terkait di RPJMN/Indikator Program */}
-                      <td className="p-1.5 border-r border-slate-200">
-                        <textarea
-                          rows={2}
-                          value={item.prioritasRpjmn || ''}
-                          onChange={e => handleCellChange(item.id, 'prioritasRpjmn', e.target.value)}
-                          placeholder="Keterkaitan Prioritas Nasional RPJMN..."
-                          className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-blue-500 rounded-md text-xs resize-y focus:outline-hidden transition leading-relaxed text-slate-800"
-                        />
-                      </td>
-
-                      {/* Sektor Unggulan */}
-                      <td className="p-1.5 border-r border-slate-200">
-                        <select
-                          value={item.sektorUnggulan || 'Bukan sektor unggulan daerah'}
-                          onChange={e => handleCellChange(item.id, 'sektorUnggulan', e.target.value)}
-                          className={`w-full p-1.5 border rounded-md text-xs font-medium focus:outline-hidden transition ${
-                            (item.sektorUnggulan || '').includes('Prioritas') || (item.sektorUnggulan || '').includes('Unggulan')
-                              ? 'bg-amber-50 border-amber-300 text-amber-900 font-semibold'
-                              : 'bg-transparent hover:bg-white border-slate-200 text-slate-700'
-                          }`}
-                        >
-                          <option value="Bukan sektor unggulan daerah">Bukan sektor unggulan daerah</option>
-                          <option value="Sektor Unggulan Daerah">Sektor Unggulan Daerah</option>
-                          <option value="Sektor Prioritas Daerah">Sektor Prioritas Daerah</option>
-                        </select>
-                      </td>
-
-                      {/* Informasi terkait temuan dan TL, Potensi Fraud, Kasus Hukum */}
-                      <td className="p-1.5 border-r border-slate-200">
-                        <textarea
-                          rows={2}
-                          value={item.temuanFraudHukum || ''}
-                          onChange={e => handleCellChange(item.id, 'temuanFraudHukum', e.target.value)}
-                          placeholder="Catatan temuan BPK/APIP, potensi fraud, perkara hukum..."
-                          className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-rose-300 focus:border-rose-500 rounded-md text-xs resize-y focus:outline-hidden transition leading-relaxed text-slate-800"
-                        />
-                      </td>
-
-                      {/* Isu Terkini */}
-                      <td className="p-1.5 border-r border-slate-200">
-                        <textarea
-                          rows={2}
-                          value={item.isuTerkini || ''}
-                          onChange={e => handleCellChange(item.id, 'isuTerkini', e.target.value)}
-                          placeholder="Sorotan publik, pengaduan masyarakat, isu pelayanan..."
-                          className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-blue-500 rounded-md text-xs resize-y focus:outline-hidden transition leading-relaxed text-slate-800"
-                        />
-                      </td>
-
-                      {/* Aksi */}
-                      <td className="p-2 text-center sticky right-0 z-10 bg-white border-l border-slate-200">
-                        <div className="flex items-center justify-center gap-1">
-                          <button
-                            onClick={() =>
-                              handleAddProgramUnderIndikator(
-                                item.tujuanRpjmd || '',
-                                item.sasaranRpjmd || '',
-                                item.indikatorSasaranRpjmd || '',
-                                item.indikatorTujuanRpjmd || '',
-                                index
-                              )
-                            }
-                            className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition"
-                            title="Tambah baris program di bawah ini (Tujuan, Sasaran, dan Indikator sama)"
-                          >
-                            <Plus className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => handleDuplicateRow(item)}
-                            className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition"
-                            title="Duplikasi baris ini"
-                          >
-                            <Copy className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => requestDeleteRow(item)}
-                            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition"
-                            title="Hapus baris"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                      {/* RPJMD: Indikator Program (Tiap baris mandiri) */}
+                      <td className="p-1.5 border-r border-slate-200 min-w-[180px]">
+                        <div className="flex items-start gap-1">
+                          <textarea
+                            rows={2}
+                            value={item.indikatorProgramRpjmd || ''}
+                            onChange={e => handleCellChange(item.id, 'indikatorProgramRpjmd', e.target.value)}
+                            placeholder="Indikator Program..."
+                            className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-blue-500 rounded-md text-xs resize-y focus:outline-hidden transition leading-relaxed text-slate-800"
+                          />
+                          {progSpan > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteIndicatorRow(item)}
+                              className="p-1 text-slate-300 hover:text-rose-600 rounded transition opacity-0 group-hover:opacity-100 shrink-0 mt-1"
+                              title="Hapus baris indikator ini saja"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                         </div>
                       </td>
+
+                      {/* RPJMD: OPD/Unit Pengampu (Merged with Program RPJMD: 1 Program = 1 OPD) */}
+                      {showProgram && (
+                        <td
+                          rowSpan={progSpan}
+                          className={`p-1.5 border-r border-slate-200 align-top min-w-[200px] ${
+                            progSpan > 1 ? 'bg-slate-50/60' : 'bg-slate-50/40'
+                          }`}
+                        >
+                          <div className="flex flex-col h-full justify-start gap-1">
+                            <input
+                              type="text"
+                              value={item.opdPengampu || ''}
+                              onChange={e => {
+                                if (progSpan > 1) {
+                                  handleMergedCellChange('opdPengampu', progIndices, e.target.value);
+                                } else {
+                                  handleCellChange(item.id, 'opdPengampu', e.target.value);
+                                }
+                              }}
+                              placeholder="Contoh: Dinas Pendidikan"
+                              className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-blue-500 rounded-md text-xs font-semibold text-slate-900 focus:outline-hidden transition"
+                            />
+                            {/* Rekomendasi/Saran OPD jika masih kosong dan terdeteksi program spesifik */}
+                            {(!item.opdPengampu || item.opdPengampu.trim() === '') && (() => {
+                              const detected = detectOPDForProgram(item.programRpjmd || '', rsoContexts);
+                              if (!detected) return null;
+                              return (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (progSpan > 1) {
+                                      handleMergedCellChange('opdPengampu', progIndices, detected.opd);
+                                    } else {
+                                      handleCellChange(item.id, 'opdPengampu', detected.opd);
+                                    }
+                                  }}
+                                  className="text-[10px] text-teal-800 bg-teal-50 hover:bg-teal-100 border border-teal-300 rounded px-1.5 py-0.5 inline-flex items-center gap-1 transition text-left cursor-pointer self-start mt-0.5 shadow-2xs"
+                                  title={`Klik untuk mengisi: ${detected.opd} (sumber: ${detected.source})`}
+                                >
+                                  <Sparkles className="w-3 h-3 text-teal-600 shrink-0" />
+                                  <span className="truncate max-w-[170px]">Isi: {detected.opd}</span>
+                                </button>
+                              );
+                            })()}
+                            {progSpan > 1 && (
+                              <span className="text-[10px] text-slate-500 font-medium px-1.5 py-0.5 bg-slate-200/50 rounded inline-block mt-0.5">
+                                1 OPD ({progSpan} Indikator)
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                      )}
+
+                      {/* RENSTRA: Irban Pengampu (Merged with Program) */}
+                      {showProgram && (
+                        <td
+                          rowSpan={progSpan}
+                          className={`p-1.5 text-center border-r border-slate-200 align-top ${
+                            progSpan > 1 ? 'bg-indigo-50/30' : ''
+                          }`}
+                        >
+                          <select
+                            value={item.irbanPengampu || ''}
+                            onChange={e => {
+                              if (e.target.value === '__ADD_NEW__') {
+                                openAddIrban('row', item.id);
+                              } else {
+                                if (progSpan > 1) {
+                                  handleMergedCellChange('irbanPengampu', progIndices, e.target.value);
+                                } else {
+                                  handleCellChange(item.id, 'irbanPengampu', e.target.value);
+                                }
+                              }
+                            }}
+                            className={`w-full p-1.5 rounded-md text-xs transition cursor-pointer focus:outline-hidden ${
+                              !item.irbanPengampu || item.irbanPengampu.trim() === ''
+                                ? 'bg-amber-50 text-amber-800 border border-amber-300 font-bold focus:ring-1 focus:ring-amber-500'
+                                : 'bg-indigo-50/60 hover:bg-white focus:bg-white border border-indigo-200 font-semibold text-indigo-900 focus:ring-1 focus:ring-indigo-500'
+                            }`}
+                          >
+                            <option value="">-- Belum Diisi --</option>
+                            {allIrbanOptions.map(irban => (
+                              <option key={irban} value={irban}>
+                                {irban}
+                              </option>
+                            ))}
+                            <option value="__ADD_NEW__" className="text-blue-600 font-bold bg-blue-50">
+                              + Tambahkan Irban...
+                            </option>
+                          </select>
+                        </td>
+                      )}
+
+                      {/* RENSTRA: Tujuan/ Sasaran dalam Renstra (Merged with Program) */}
+                      {showProgram && (
+                        <td
+                          rowSpan={progSpan}
+                          className={`p-1.5 border-r border-slate-200 align-top min-w-[190px] ${
+                            progSpan > 1 ? 'bg-indigo-50/20' : ''
+                          }`}
+                        >
+                          <textarea
+                            rows={Math.max(2, progSpan * 2)}
+                            value={item.tujuanSasaranRenstra || ''}
+                            onChange={e => {
+                              if (progSpan > 1) {
+                                handleMergedCellChange('tujuanSasaranRenstra', progIndices, e.target.value);
+                              } else {
+                                handleCellChange(item.id, 'tujuanSasaranRenstra', e.target.value);
+                              }
+                            }}
+                            placeholder="Tujuan/Sasaran Renstra..."
+                            className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-indigo-500 rounded-md text-xs resize-y focus:outline-hidden transition leading-relaxed text-slate-800"
+                          />
+                        </td>
+                      )}
+
+                      {/* RENSTRA: Indikator Tujuan/ Sasaran (Merged with Program) */}
+                      {showProgram && (
+                        <td
+                          rowSpan={progSpan}
+                          className={`p-1.5 border-r border-slate-200 align-top min-w-[180px] ${
+                            progSpan > 1 ? 'bg-indigo-50/20' : ''
+                          }`}
+                        >
+                          <textarea
+                            rows={Math.max(2, progSpan * 2)}
+                            value={item.indikatorRenstra || ''}
+                            onChange={e => {
+                              if (progSpan > 1) {
+                                handleMergedCellChange('indikatorRenstra', progIndices, e.target.value);
+                              } else {
+                                handleCellChange(item.id, 'indikatorRenstra', e.target.value);
+                              }
+                            }}
+                            placeholder="Indikator Sasaran Renstra..."
+                            className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-indigo-500 rounded-md text-xs resize-y focus:outline-hidden transition leading-relaxed text-slate-800"
+                          />
+                        </td>
+                      )}
+
+                      {/* RENSTRA: Program (Merged with Program RPJMD, dengan fitur Tambah Indikator) */}
+                      {showProgram && (
+                        <td
+                          rowSpan={progSpan}
+                          className={`p-1.5 border-r border-slate-200 align-top min-w-[200px] ${
+                            progSpan > 1 ? 'bg-indigo-50/40' : 'bg-indigo-50/20'
+                          }`}
+                        >
+                          <div className="flex flex-col h-full justify-between gap-1.5">
+                            <div>
+                              <textarea
+                                rows={Math.max(2, progSpan * 2)}
+                                value={item.programRenstra || ''}
+                                onChange={e => {
+                                  if (progSpan > 1) {
+                                    handleMergedCellChange('programRenstra', progIndices, e.target.value);
+                                  } else {
+                                    handleCellChange(item.id, 'programRenstra', e.target.value);
+                                  }
+                                }}
+                                placeholder="Nama Program Renstra OPD..."
+                                className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-indigo-300 focus:border-indigo-500 rounded-md text-xs font-semibold text-indigo-950 resize-y focus:outline-hidden transition leading-relaxed"
+                              />
+                              {progSpan > 1 && (
+                                <div className="text-[10px] text-indigo-700 font-medium px-1.5 py-0.5 bg-indigo-100/60 rounded inline-flex items-center gap-1 mt-1">
+                                  <Layers className="w-3 h-3 text-indigo-600" />
+                                  <span>{progSpan} Indikator</span>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Tombol tambah Indikator di bawah Program Renstra */}
+                            <div className="pt-1.5 border-t border-indigo-200/50 flex flex-wrap items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleAddIndikatorUnderProgram(
+                                    item.tujuanRpjmd || '',
+                                    item.sasaranRpjmd || '',
+                                    item.indikatorSasaranRpjmd || '',
+                                    item.indikatorTujuanRpjmd || '',
+                                    item.programRpjmd || '',
+                                    item.opdPengampu || '',
+                                    item.irbanPengampu || '',
+                                    index + progSpan - 1
+                                  )
+                                }
+                                className="text-[10px] text-indigo-700 hover:text-indigo-800 font-semibold px-2 py-0.5 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded self-start flex items-center gap-1 transition shadow-2xs"
+                                title="Tambah baris Indikator Program baru untuk Program Renstra ini"
+                              >
+                                <Plus className="w-3 h-3" />
+                                <span>+ Indikator Renstra</span>
+                              </button>
+                            </div>
+                          </div>
+                        </td>
+                      )}
+
+                      {/* RENSTRA: Indikator Program (Tiap baris mandiri) */}
+                      <td className="p-1.5 border-r border-slate-200 min-w-[180px]">
+                        <div className="flex items-start gap-1">
+                          <textarea
+                            rows={2}
+                            value={item.indikatorProgramRenstra || ''}
+                            onChange={e => handleCellChange(item.id, 'indikatorProgramRenstra', e.target.value)}
+                            placeholder="Indikator Program Renstra..."
+                            className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-indigo-500 rounded-md text-xs resize-y focus:outline-hidden transition leading-relaxed text-slate-800"
+                          />
+                          {progSpan > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteIndicatorRow(item)}
+                              className="p-1 text-slate-300 hover:text-rose-600 rounded transition opacity-0 group-hover:opacity-100 shrink-0 mt-1"
+                              title="Hapus baris indikator ini saja"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+
+                      {/* RENSTRA: Anggaran Program (Merged with Program) */}
+                      {showProgram && (
+                        <td
+                          rowSpan={progSpan}
+                          className={`p-1.5 text-right border-r border-slate-200 align-top min-w-[170px] ${
+                            progSpan > 1 ? 'bg-emerald-50/40' : 'bg-emerald-50/20'
+                          }`}
+                        >
+                          <div className="flex flex-col h-full justify-start gap-1">
+                            <input
+                              type="number"
+                              min={0}
+                              step={1000000}
+                              value={item.anggaran ?? 0}
+                              onChange={e => {
+                                const val = Number(e.target.value) || 0;
+                                if (progSpan > 1) {
+                                  handleMergedCellChange('anggaran', progIndices, val);
+                                } else {
+                                  handleCellChange(item.id, 'anggaran', val);
+                                }
+                              }}
+                              placeholder="0"
+                              className="w-full p-2 text-right bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-emerald-300 focus:border-emerald-500 rounded-md text-xs font-bold text-emerald-800 focus:outline-hidden transition"
+                            />
+                            {progSpan > 1 && (
+                              <span className="text-[10px] text-emerald-700 font-medium px-1.5 py-0.5 bg-emerald-100/60 rounded inline-block text-center">
+                                Anggaran 1 Program
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                      )}
+
+                      {/* Program Prioritas terkait di RPJMN/Indikator Program (Merged with Program) */}
+                      {showProgram && (
+                        <td
+                          rowSpan={progSpan}
+                          className={`p-1.5 border-r border-slate-200 align-top min-w-[220px] ${
+                            progSpan > 1 ? 'bg-slate-50/40' : ''
+                          }`}
+                        >
+                          <textarea
+                            rows={Math.max(2, progSpan * 2)}
+                            value={item.prioritasRpjmn || ''}
+                            onChange={e => {
+                              if (progSpan > 1) {
+                                handleMergedCellChange('prioritasRpjmn', progIndices, e.target.value);
+                              } else {
+                                handleCellChange(item.id, 'prioritasRpjmn', e.target.value);
+                              }
+                            }}
+                            placeholder="Keterkaitan Prioritas Nasional RPJMN..."
+                            className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-blue-500 rounded-md text-xs resize-y focus:outline-hidden transition leading-relaxed text-slate-800"
+                          />
+                        </td>
+                      )}
+
+                      {/* Sektor Unggulan (Merged with Program) */}
+                      {showProgram && (
+                        <td
+                          rowSpan={progSpan}
+                          className={`p-1.5 border-r border-slate-200 align-top min-w-[190px] ${
+                            progSpan > 1 ? 'bg-slate-50/40' : ''
+                          }`}
+                        >
+                          <select
+                            value={item.sektorUnggulan || 'Bukan sektor unggulan daerah'}
+                            onChange={e => {
+                              if (progSpan > 1) {
+                                handleMergedCellChange('sektorUnggulan', progIndices, e.target.value);
+                              } else {
+                                handleCellChange(item.id, 'sektorUnggulan', e.target.value);
+                              }
+                            }}
+                            className={`w-full p-1.5 border rounded-md text-xs font-medium focus:outline-hidden transition ${
+                              (item.sektorUnggulan || '').includes('Prioritas') || (item.sektorUnggulan || '').includes('Unggulan')
+                                ? 'bg-amber-50 border-amber-300 text-amber-900 font-semibold'
+                                : 'bg-transparent hover:bg-white border-slate-200 text-slate-700'
+                            }`}
+                          >
+                            <option value="Bukan sektor unggulan daerah">Bukan sektor unggulan daerah</option>
+                            <option value="Sektor Unggulan Daerah">Sektor Unggulan Daerah</option>
+                            <option value="Sektor Prioritas Daerah">Sektor Prioritas Daerah</option>
+                          </select>
+                        </td>
+                      )}
+
+                      {/* Informasi terkait temuan dan TL, Potensi Fraud, Kasus Hukum (Merged with Program) */}
+                      {showProgram && (
+                        <td
+                          rowSpan={progSpan}
+                          className={`p-1.5 border-r border-slate-200 align-top min-w-[240px] ${
+                            progSpan > 1 ? 'bg-rose-50/20' : ''
+                          }`}
+                        >
+                          <textarea
+                            rows={Math.max(2, progSpan * 2)}
+                            value={item.temuanFraudHukum || ''}
+                            onChange={e => {
+                              if (progSpan > 1) {
+                                handleMergedCellChange('temuanFraudHukum', progIndices, e.target.value);
+                              } else {
+                                handleCellChange(item.id, 'temuanFraudHukum', e.target.value);
+                              }
+                            }}
+                            placeholder="Catatan temuan BPK/APIP, potensi fraud, perkara hukum..."
+                            className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-rose-300 focus:border-rose-500 rounded-md text-xs resize-y focus:outline-hidden transition leading-relaxed text-slate-800"
+                          />
+                        </td>
+                      )}
+
+                      {/* Isu Terkini (Merged with Program) */}
+                      {showProgram && (
+                        <td
+                          rowSpan={progSpan}
+                          className={`p-1.5 border-r border-slate-200 align-top min-w-[220px] ${
+                            progSpan > 1 ? 'bg-slate-50/40' : ''
+                          }`}
+                        >
+                          <textarea
+                            rows={Math.max(2, progSpan * 2)}
+                            value={item.isuTerkini || ''}
+                            onChange={e => {
+                              if (progSpan > 1) {
+                                handleMergedCellChange('isuTerkini', progIndices, e.target.value);
+                              } else {
+                                handleCellChange(item.id, 'isuTerkini', e.target.value);
+                              }
+                            }}
+                            placeholder="Sorotan publik, pengaduan masyarakat, isu pelayanan..."
+                            className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-blue-500 rounded-md text-xs resize-y focus:outline-hidden transition leading-relaxed text-slate-800"
+                          />
+                        </td>
+                      )}
+
+                      {/* Aksi (Merged with Program) */}
+                      {showProgram && (
+                        <td
+                          rowSpan={progSpan}
+                          className="p-2 text-center sticky right-0 z-10 bg-white border-l border-slate-200 align-top"
+                        >
+                          <div className="flex flex-col items-center justify-center gap-1.5">
+                            <button
+                              onClick={() =>
+                                handleAddIndikatorUnderProgram(
+                                  item.tujuanRpjmd || '',
+                                  item.sasaranRpjmd || '',
+                                  item.indikatorSasaranRpjmd || '',
+                                  item.indikatorTujuanRpjmd || '',
+                                  item.programRpjmd || '',
+                                  item.opdPengampu || '',
+                                  item.irbanPengampu || '',
+                                  index + progSpan - 1
+                                )
+                              }
+                              className="p-1.5 text-slate-500 hover:text-teal-700 hover:bg-teal-50 rounded-md transition border border-transparent hover:border-teal-200"
+                              title="Tambah Indikator Program baru"
+                            >
+                              <Plus className="w-4 h-4 text-teal-600" />
+                            </button>
+                            <button
+                              onClick={() => handleDuplicateRow(item)}
+                              className="p-1.5 text-slate-500 hover:text-indigo-700 hover:bg-indigo-50 rounded-md transition border border-transparent hover:border-indigo-200"
+                              title="Duplikasi baris program ini"
+                            >
+                              <Copy className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => {
+                                if (progSpan > 1) {
+                                  requestDeleteProgram(progIndices, item.programRpjmd || item.programRenstra || `Program`);
+                                } else {
+                                  requestDeleteRow(item);
+                                }
+                              }}
+                              className="p-1.5 text-slate-500 hover:text-rose-700 hover:bg-rose-50 rounded-md transition border border-transparent hover:border-rose-200"
+                              title={progSpan > 1 ? `Hapus seluruh program (${progSpan} indikator)` : 'Hapus baris'}
+                            >
+                              <Trash2 className="w-4 h-4 text-rose-500" />
+                            </button>
+                          </div>
+                        </td>
+                      )}
                     </tr>
                   );
                 })
