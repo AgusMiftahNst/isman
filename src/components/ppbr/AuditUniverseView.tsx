@@ -26,7 +26,8 @@ import {
   AlertCircle,
   Upload,
   Download,
-  Sparkles
+  Sparkles,
+  ArrowUpDown
 } from 'lucide-react';
 
 const DEFAULT_INDIKATOR_TUJUAN: Record<string, string> = {
@@ -421,7 +422,80 @@ export const normalizeAuditUniverseData = (
     }
   });
 
+  // Step 2.5: Unify Renstra OPD level (Irban, Tujuan Renstra, Indikator Renstra) untuk OPD yang sama
+  // Niatnya agar pengguna cukup 1 kali mengisi Renstra untuk 1 OPD
+  interface OPDCanonicalData {
+    irbanPengampu?: string;
+    tujuanSasaranRenstra?: string;
+    indikatorRenstra?: string;
+  }
+  const opdCanonicalMap = new Map<string, OPDCanonicalData>();
+  result.forEach(item => {
+    const opd = (item.opdPengampu || '').trim().toLowerCase();
+    if (!opd) return;
+
+    let canon = opdCanonicalMap.get(opd);
+    if (!canon) {
+      canon = {};
+      opdCanonicalMap.set(opd, canon);
+    }
+
+    if (!canon.irbanPengampu && (item.irbanPengampu || '').trim()) canon.irbanPengampu = item.irbanPengampu.trim();
+    if (!canon.tujuanSasaranRenstra && (item.tujuanSasaranRenstra || '').trim()) canon.tujuanSasaranRenstra = item.tujuanSasaranRenstra.trim();
+    if (!canon.indikatorRenstra && (item.indikatorRenstra || '').trim()) canon.indikatorRenstra = item.indikatorRenstra.trim();
+  });
+
+  result.forEach(item => {
+    const opd = (item.opdPengampu || '').trim().toLowerCase();
+    if (!opd) return;
+    const canon = opdCanonicalMap.get(opd);
+    if (!canon) return;
+
+    if (canon.irbanPengampu && (item.irbanPengampu || '').trim() !== canon.irbanPengampu) {
+      item.irbanPengampu = canon.irbanPengampu;
+      hasChanges = true;
+    }
+    if (canon.tujuanSasaranRenstra && (item.tujuanSasaranRenstra || '').trim() !== canon.tujuanSasaranRenstra) {
+      item.tujuanSasaranRenstra = canon.tujuanSasaranRenstra;
+      hasChanges = true;
+    }
+    if (canon.indikatorRenstra && (item.indikatorRenstra || '').trim() !== canon.indikatorRenstra) {
+      item.indikatorRenstra = canon.indikatorRenstra;
+      hasChanges = true;
+    }
+  });
+
   return { normalized: result, hasChanges };
+};
+
+// Helper: Mengurutkan data Audit Universe berdasarkan Nama OPD (A-Z) agar OPD yang sama berkumpul & ter-merge
+export const sortAuditUniverseByOPD = (items: AuditUniverseItem[]): AuditUniverseItem[] => {
+  if (!items || items.length <= 1) return items;
+  return [...items].sort((a, b) => {
+    const opdA = (a.opdPengampu || '').trim();
+    const opdB = (b.opdPengampu || '').trim();
+
+    // 1. Baris yang memiliki nama OPD diletakkan di atas, diurutkan A-Z
+    if (opdA && !opdB) return -1;
+    if (!opdA && opdB) return 1;
+    if (opdA && opdB) {
+      const cmpOpd = opdA.localeCompare(opdB, 'id', { sensitivity: 'base' });
+      if (cmpOpd !== 0) return cmpOpd;
+    }
+
+    // 2. Dalam OPD yang sama, urutkan berdasarkan Program RPJMD
+    const progA = (a.programRpjmd || '').trim();
+    const progB = (b.programRpjmd || '').trim();
+    if (progA && !progB) return -1;
+    if (!progA && progB) return 1;
+    if (progA && progB) {
+      const cmpProg = progA.localeCompare(progB, 'id', { sensitivity: 'base' });
+      if (cmpProg !== 0) return cmpProg;
+    }
+
+    // 3. Dalam Program yang sama, pertahankan urutan nomor / indikator semula
+    return (a.no || 0) - (b.no || 0);
+  });
 };
 
 export interface AuditUniverseViewProps {
@@ -471,6 +545,7 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
   const [filterOPD, setFilterOPD] = useState('ALL');
   const [filterProgram, setFilterProgram] = useState('ALL');
   const [mergeViewMode, setMergeViewMode] = useState<boolean>(true);
+  const [sortByOPD, setSortByOPD] = useState<boolean>(true);
 
   // RSO & ROO Contexts (untuk deteksi otomatis OPD dan program terkait)
   const [rsoContexts, setRsoContexts] = useState<any[]>([]);
@@ -949,8 +1024,15 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
   // Direct cell update
   const handleCellChange = (id: string, field: keyof AuditUniverseItem, value: any) => {
     let detectedOpdName: string | null = null;
+    const targetItem = data.find(d => d.id === id);
+    const targetOpd = (targetItem?.opdPengampu || '').trim().toLowerCase();
+    const isOpdLevelField = (field === 'tujuanSasaranRenstra' || field === 'indikatorRenstra' || field === 'irbanPengampu') && Boolean(targetOpd);
+
     const updated = data.map(item => {
-      if (item.id === id) {
+      const matchId = item.id === id;
+      const matchOpd = isOpdLevelField && (item.opdPengampu || '').trim().toLowerCase() === targetOpd;
+
+      if (matchId || matchOpd) {
         const next: AuditUniverseItem = {
           ...item,
           [field]: field === 'anggaran' ? Number(value) || 0 : value
@@ -986,9 +1068,18 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
     value: any
   ) => {
     const idsToUpdate = new Set(groupIndices.map(idx => filteredData[idx]?.id).filter(Boolean));
+    const isOpdLevelField = (field === 'tujuanSasaranRenstra' || field === 'indikatorRenstra' || field === 'irbanPengampu' || field === 'opdPengampu');
+    let targetOpd = '';
+    if (isOpdLevelField && groupIndices.length > 0) {
+      targetOpd = (filteredData[groupIndices[0]]?.opdPengampu || '').trim().toLowerCase();
+    }
+
     let detectedOpdName: string | null = null;
     const updated = data.map(item => {
-      if (idsToUpdate.has(item.id)) {
+      const matchId = idsToUpdate.has(item.id);
+      const matchOpd = isOpdLevelField && Boolean(targetOpd) && (item.opdPengampu || '').trim().toLowerCase() === targetOpd;
+
+      if (matchId || matchOpd) {
         const next: AuditUniverseItem = {
           ...item,
           [field]: field === 'anggaran' ? Number(value) || 0 : value
@@ -1284,16 +1375,12 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
     });
   };
 
-  // Merge Program & OPD otomatis untuk baris indikator tanpa nama program di bawahnya
+  // Merge Program & OPD otomatis untuk baris indikator tanpa nama program di bawahnya, serta urutkan sesuai OPD
   const handleRunNormalizeAndMerge = () => {
-    const { normalized, hasChanges } = normalizeAuditUniverseData(data, rsoContexts);
-    if (!hasChanges) {
-      setToastNotice('Data Program & OPD sudah optimal dan terorganisir rapi.');
-      setTimeout(() => setToastNotice(null), 3000);
-      return;
-    }
-    handleSaveData(normalized, true);
-    setToastNotice('Berhasil merapikan & mengisi otomatis Program dan OPD!');
+    const { normalized } = normalizeAuditUniverseData(data, rsoContexts);
+    const sorted = sortAuditUniverseByOPD(normalized).map((d, idx) => ({ ...d, no: idx + 1 }));
+    handleSaveData(sorted, true);
+    setToastNotice('Berhasil merapikan, mengurutkan sesuai OPD, dan menggabungkan Renstra!');
     setTimeout(() => setToastNotice(null), 4000);
   };
 
@@ -1471,9 +1558,9 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
     });
   };
 
-  // Filtered data
+  // Filtered and sorted data
   const filteredData = useMemo(() => {
-    return data.filter(item => {
+    const list = data.filter(item => {
       const matchSearch =
         (item.tujuanRpjmd || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
         (item.sasaranRpjmd || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -1505,7 +1592,10 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
 
       return matchSearch && matchIrban && matchOPD && matchProgram;
     });
-  }, [data, searchTerm, filterIrban, filterOPD, filterProgram]);
+
+    if (!sortByOPD) return list;
+    return sortAuditUniverseByOPD(list);
+  }, [data, searchTerm, filterIrban, filterOPD, filterProgram, sortByOPD]);
 
   // Compute Spans for Merging Identical Cells
   const spanInfo = useMemo(() => {
@@ -1519,6 +1609,8 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
     const indikatorIndices: { [index: number]: number[] } = {};
     const programSpan: { [index: number]: number } = {};
     const programIndices: { [index: number]: number[] } = {};
+    const opdSpan: { [index: number]: number } = {};
+    const opdIndices: { [index: number]: number[] } = {};
 
     if (!mergeViewMode) {
       return {
@@ -1531,10 +1623,71 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
         indikatorSpan,
         indikatorIndices,
         programSpan,
-        programIndices
+        programIndices,
+        opdSpan,
+        opdIndices
       };
     }
 
+    // 1. OPD Span: Menggabungkan baris dengan OPD yang sama yang berurutan
+    let oStart = 0;
+    while (oStart < filteredData.length) {
+      const curOpd = (filteredData[oStart].opdPengampu || '').trim();
+      let oEnd = oStart + 1;
+      const oList = [oStart];
+
+      if (curOpd !== '') {
+        while (
+          oEnd < filteredData.length &&
+          (filteredData[oEnd].opdPengampu || '').trim().toLowerCase() === curOpd.toLowerCase()
+        ) {
+          oList.push(oEnd);
+          oEnd++;
+        }
+      }
+
+      const oSpanVal = oEnd - oStart;
+      opdSpan[oStart] = oSpanVal;
+      opdIndices[oStart] = oList;
+
+      for (let ok = oStart + 1; ok < oEnd; ok++) {
+        opdSpan[ok] = 0; // mark as hidden
+      }
+
+      oStart = oEnd;
+    }
+
+    // 2. Program Span: Menggabungkan Program RPJMD & Renstra yang sama dan OPD yang sama
+    let pStart = 0;
+    while (pStart < filteredData.length) {
+      const curProg = (filteredData[pStart].programRpjmd || '').trim();
+      const curOpd = (filteredData[pStart].opdPengampu || '').trim().toLowerCase();
+      let pEnd = pStart + 1;
+      const pList = [pStart];
+
+      if (curProg !== '') {
+        while (
+          pEnd < filteredData.length &&
+          (filteredData[pEnd].programRpjmd || '').trim() === curProg &&
+          (filteredData[pEnd].opdPengampu || '').trim().toLowerCase() === curOpd
+        ) {
+          pList.push(pEnd);
+          pEnd++;
+        }
+      }
+
+      const pSpanVal = pEnd - pStart;
+      programSpan[pStart] = pSpanVal;
+      programIndices[pStart] = pList;
+
+      for (let pk = pStart + 1; pk < pEnd; pk++) {
+        programSpan[pk] = 0;
+      }
+
+      pStart = pEnd;
+    }
+
+    // 3. RPJMD Hierarchy Spans (Tujuan -> IndikatorTujuan -> Sasaran -> IndikatorSasaran)
     let i = 0;
     while (i < filteredData.length) {
       const currentTujuan = (filteredData[i].tujuanRpjmd || '').trim();
@@ -1553,10 +1706,9 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
       tujuanIndices[i] = tIndices;
 
       for (let k = i + 1; k < j; k++) {
-        tujuanSpan[k] = 0; // mark as hidden
+        tujuanSpan[k] = 0;
       }
 
-      // Inside this tujuan group, calculate indikatorTujuan span
       let tIndStart = i;
       while (tIndStart < j) {
         const curIndT = (filteredData[tIndStart].indikatorTujuanRpjmd || '').trim();
@@ -1578,10 +1730,9 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
         indikatorTujuanIndices[tIndStart] = indTIndices;
 
         for (let tk = tIndStart + 1; tk < tIndEnd; tk++) {
-          indikatorTujuanSpan[tk] = 0; // mark as hidden
+          indikatorTujuanSpan[tk] = 0;
         }
 
-        // Inside this indikatorTujuan group, calculate sasaran span
         let sStart = tIndStart;
         while (sStart < tIndEnd) {
           const currentSasaran = (filteredData[sStart].sasaranRpjmd || '').trim();
@@ -1603,10 +1754,9 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
           sasaranIndices[sStart] = sIndices;
 
           for (let sk = sStart + 1; sk < sEnd; sk++) {
-            sasaranSpan[sk] = 0; // mark as hidden
+            sasaranSpan[sk] = 0;
           }
 
-          // Inside this sasaran group, calculate indikator span
           let indStart = sStart;
           while (indStart < sEnd) {
             const curInd = (filteredData[indStart].indikatorSasaranRpjmd || '').trim();
@@ -1631,34 +1781,6 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
               indikatorSpan[ik] = 0;
             }
 
-            // Inside this indikator group, calculate program span (1 Program = 1 OPD)
-            let pStart = indStart;
-            while (pStart < indEnd) {
-              const curProg = (filteredData[pStart].programRpjmd || '').trim();
-              let pEnd = pStart + 1;
-              const pIndices = [pStart];
-
-              if (curProg !== '') {
-                while (
-                  pEnd < indEnd &&
-                  (filteredData[pEnd].programRpjmd || '').trim() === curProg
-                ) {
-                  pIndices.push(pEnd);
-                  pEnd++;
-                }
-              }
-
-              const progSpan = pEnd - pStart;
-              programSpan[pStart] = progSpan;
-              programIndices[pStart] = pIndices;
-
-              for (let pk = pStart + 1; pk < pEnd; pk++) {
-                programSpan[pk] = 0; // mark as hidden
-              }
-
-              pStart = pEnd;
-            }
-
             indStart = indEnd;
           }
 
@@ -1681,7 +1803,9 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
       indikatorSpan,
       indikatorIndices,
       programSpan,
-      programIndices
+      programIndices,
+      opdSpan,
+      opdIndices
     };
   }, [filteredData, mergeViewMode]);
 
@@ -1841,6 +1965,20 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
                 <span>{isManualSyncing ? 'Sinkronisasi...' : 'Sinkronkan'}</span>
               </button>
             )}
+
+            {/* Toggle Urutan: Sesuai Nama OPD (A-Z) vs Struktur RPJMD */}
+            <button
+              onClick={() => setSortByOPD(!sortByOPD)}
+              className={`px-3 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition border ${
+                sortByOPD
+                  ? 'bg-teal-600/90 text-white border-teal-400/50 shadow-xs'
+                  : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
+              }`}
+              title="Urutkan baris berdasarkan Nama OPD (A-Z) agar OPD yang sama otomatis berkumpul & ter-merge"
+            >
+              <ArrowUpDown className="w-4 h-4 text-teal-200" />
+              <span>{sortByOPD ? 'Urutan: Nama OPD (A-Z)' : 'Urutan: Struktur RPJMD'}</span>
+            </button>
 
             <button
               onClick={() => setMergeViewMode(!mergeViewMode)}
@@ -2217,6 +2355,10 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
                   const showProgram = progSpan > 0;
                   const progIndices = spanInfo.programIndices?.[index] || [index];
 
+                  const opdSpan = spanInfo.opdSpan?.[index] ?? 1;
+                  const showOPD = opdSpan > 0;
+                  const opdIndices = spanInfo.opdIndices?.[index] || [index];
+
                   return (
                     <tr
                       key={item.id}
@@ -2524,12 +2666,12 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
                         </div>
                       </td>
 
-                      {/* RPJMD: OPD/Unit Pengampu (Merged with Program RPJMD: 1 Program = 1 OPD) */}
-                      {showProgram && (
+                      {/* RPJMD: OPD/Unit Pengampu (Merged per OPD: Urut sesuai Nama OPD) */}
+                      {showOPD && (
                         <td
-                          rowSpan={progSpan}
+                          rowSpan={opdSpan}
                           className={`p-1.5 border-r border-slate-200 align-top min-w-[200px] ${
-                            progSpan > 1 ? 'bg-slate-50/60' : 'bg-slate-50/40'
+                            opdSpan > 1 ? 'bg-slate-50/70 font-semibold' : 'bg-slate-50/40'
                           }`}
                         >
                           <div className="flex flex-col h-full justify-start gap-1">
@@ -2537,8 +2679,8 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
                               type="text"
                               value={item.opdPengampu || ''}
                               onChange={e => {
-                                if (progSpan > 1) {
-                                  handleMergedCellChange('opdPengampu', progIndices, e.target.value);
+                                if (opdSpan > 1) {
+                                  handleMergedCellChange('opdPengampu', opdIndices, e.target.value);
                                 } else {
                                   handleCellChange(item.id, 'opdPengampu', e.target.value);
                                 }
@@ -2554,8 +2696,8 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
                                 <button
                                   type="button"
                                   onClick={() => {
-                                    if (progSpan > 1) {
-                                      handleMergedCellChange('opdPengampu', progIndices, detected.opd);
+                                    if (opdSpan > 1) {
+                                      handleMergedCellChange('opdPengampu', opdIndices, detected.opd);
                                     } else {
                                       handleCellChange(item.id, 'opdPengampu', detected.opd);
                                     }
@@ -2568,100 +2710,123 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
                                 </button>
                               );
                             })()}
-                            {progSpan > 1 && (
-                              <span className="text-[10px] text-slate-500 font-medium px-1.5 py-0.5 bg-slate-200/50 rounded inline-block mt-0.5">
-                                1 OPD ({progSpan} Indikator)
+                            {opdSpan > 1 && (
+                              <span className="text-[10px] text-teal-800 font-semibold px-1.5 py-0.5 bg-teal-50 border border-teal-200 rounded inline-block mt-0.5 self-start shadow-2xs">
+                                1 OPD ({opdSpan} Baris)
                               </span>
                             )}
                           </div>
                         </td>
                       )}
 
-                      {/* RENSTRA: Irban Pengampu (Merged with Program) */}
-                      {showProgram && (
+                      {/* RENSTRA: Irban Pengampu (Merged per OPD: 1 OPD = 1 Irban) */}
+                      {showOPD && (
                         <td
-                          rowSpan={progSpan}
+                          rowSpan={opdSpan}
                           className={`p-1.5 text-center border-r border-slate-200 align-top ${
-                            progSpan > 1 ? 'bg-indigo-50/30' : ''
+                            opdSpan > 1 ? 'bg-indigo-50/40' : ''
                           }`}
                         >
-                          <select
-                            value={item.irbanPengampu || ''}
-                            onChange={e => {
-                              if (e.target.value === '__ADD_NEW__') {
-                                openAddIrban('row', item.id);
-                              } else {
-                                if (progSpan > 1) {
-                                  handleMergedCellChange('irbanPengampu', progIndices, e.target.value);
+                          <div className="flex flex-col h-full justify-start gap-1">
+                            <select
+                              value={item.irbanPengampu || ''}
+                              onChange={e => {
+                                if (e.target.value === '__ADD_NEW__') {
+                                  openAddIrban('row', item.id);
                                 } else {
-                                  handleCellChange(item.id, 'irbanPengampu', e.target.value);
+                                  if (opdSpan > 1) {
+                                    handleMergedCellChange('irbanPengampu', opdIndices, e.target.value);
+                                  } else {
+                                    handleCellChange(item.id, 'irbanPengampu', e.target.value);
+                                  }
                                 }
-                              }
-                            }}
-                            className={`w-full p-1.5 rounded-md text-xs transition cursor-pointer focus:outline-hidden ${
-                              !item.irbanPengampu || item.irbanPengampu.trim() === ''
-                                ? 'bg-amber-50 text-amber-800 border border-amber-300 font-bold focus:ring-1 focus:ring-amber-500'
-                                : 'bg-indigo-50/60 hover:bg-white focus:bg-white border border-indigo-200 font-semibold text-indigo-900 focus:ring-1 focus:ring-indigo-500'
-                            }`}
-                          >
-                            <option value="">-- Belum Diisi --</option>
-                            {allIrbanOptions.map(irban => (
-                              <option key={irban} value={irban}>
-                                {irban}
+                              }}
+                              className={`w-full p-1.5 rounded-md text-xs transition cursor-pointer focus:outline-hidden ${
+                                !item.irbanPengampu || item.irbanPengampu.trim() === ''
+                                  ? 'bg-amber-50 text-amber-800 border border-amber-300 font-bold focus:ring-1 focus:ring-amber-500'
+                                  : 'bg-indigo-50/60 hover:bg-white focus:bg-white border border-indigo-200 font-semibold text-indigo-900 focus:ring-1 focus:ring-indigo-500'
+                              }`}
+                            >
+                              <option value="">-- Belum Diisi --</option>
+                              {allIrbanOptions.map(irban => (
+                                <option key={irban} value={irban}>
+                                  {irban}
+                                </option>
+                              ))}
+                              <option value="__ADD_NEW__" className="text-blue-600 font-bold bg-blue-50">
+                                + Tambahkan Irban...
                               </option>
-                            ))}
-                            <option value="__ADD_NEW__" className="text-blue-600 font-bold bg-blue-50">
-                              + Tambahkan Irban...
-                            </option>
-                          </select>
+                            </select>
+                            {opdSpan > 1 && (
+                              <span className="text-[10px] text-indigo-700 font-medium px-1.5 py-0.5 bg-indigo-100/50 rounded inline-block self-center">
+                                Irban ({opdSpan} Baris)
+                              </span>
+                            )}
+                          </div>
                         </td>
                       )}
 
-                      {/* RENSTRA: Tujuan/ Sasaran dalam Renstra (Merged with Program) */}
-                      {showProgram && (
+                      {/* RENSTRA: Tujuan/ Sasaran dalam Renstra (Merged per OPD: Cukup isi 1 kali untuk OPD yang sama) */}
+                      {showOPD && (
                         <td
-                          rowSpan={progSpan}
+                          rowSpan={opdSpan}
                           className={`p-1.5 border-r border-slate-200 align-top min-w-[190px] ${
-                            progSpan > 1 ? 'bg-indigo-50/20' : ''
+                            opdSpan > 1 ? 'bg-indigo-50/30' : ''
                           }`}
                         >
-                          <textarea
-                            rows={Math.max(2, progSpan * 2)}
-                            value={item.tujuanSasaranRenstra || ''}
-                            onChange={e => {
-                              if (progSpan > 1) {
-                                handleMergedCellChange('tujuanSasaranRenstra', progIndices, e.target.value);
-                              } else {
-                                handleCellChange(item.id, 'tujuanSasaranRenstra', e.target.value);
-                              }
-                            }}
-                            placeholder="Tujuan/Sasaran Renstra..."
-                            className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-indigo-500 rounded-md text-xs resize-y focus:outline-hidden transition leading-relaxed text-slate-800"
-                          />
+                          <div className="flex flex-col h-full justify-between gap-1">
+                            <textarea
+                              rows={Math.max(2, opdSpan * 2)}
+                              value={item.tujuanSasaranRenstra || ''}
+                              onChange={e => {
+                                if (opdSpan > 1) {
+                                  handleMergedCellChange('tujuanSasaranRenstra', opdIndices, e.target.value);
+                                } else {
+                                  handleCellChange(item.id, 'tujuanSasaranRenstra', e.target.value);
+                                }
+                              }}
+                              placeholder="Tujuan/Sasaran Renstra OPD..."
+                              className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-indigo-500 rounded-md text-xs resize-y focus:outline-hidden transition leading-relaxed text-slate-800"
+                            />
+                            {opdSpan > 1 && (
+                              <div className="text-[10px] text-indigo-700 font-medium px-1.5 py-0.5 bg-indigo-100/60 rounded inline-flex items-center gap-1 self-start">
+                                <Layers className="w-3 h-3 text-indigo-600" />
+                                <span>Tujuan Renstra ({opdSpan} Baris)</span>
+                              </div>
+                            )}
+                          </div>
                         </td>
                       )}
 
-                      {/* RENSTRA: Indikator Tujuan/ Sasaran (Merged with Program) */}
-                      {showProgram && (
+                      {/* RENSTRA: Indikator Tujuan/ Sasaran (Merged per OPD: Cukup isi 1 kali untuk OPD yang sama) */}
+                      {showOPD && (
                         <td
-                          rowSpan={progSpan}
+                          rowSpan={opdSpan}
                           className={`p-1.5 border-r border-slate-200 align-top min-w-[180px] ${
-                            progSpan > 1 ? 'bg-indigo-50/20' : ''
+                            opdSpan > 1 ? 'bg-indigo-50/30' : ''
                           }`}
                         >
-                          <textarea
-                            rows={Math.max(2, progSpan * 2)}
-                            value={item.indikatorRenstra || ''}
-                            onChange={e => {
-                              if (progSpan > 1) {
-                                handleMergedCellChange('indikatorRenstra', progIndices, e.target.value);
-                              } else {
-                                handleCellChange(item.id, 'indikatorRenstra', e.target.value);
-                              }
-                            }}
-                            placeholder="Indikator Sasaran Renstra..."
-                            className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-indigo-500 rounded-md text-xs resize-y focus:outline-hidden transition leading-relaxed text-slate-800"
-                          />
+                          <div className="flex flex-col h-full justify-between gap-1">
+                            <textarea
+                              rows={Math.max(2, opdSpan * 2)}
+                              value={item.indikatorRenstra || ''}
+                              onChange={e => {
+                                if (opdSpan > 1) {
+                                  handleMergedCellChange('indikatorRenstra', opdIndices, e.target.value);
+                                } else {
+                                  handleCellChange(item.id, 'indikatorRenstra', e.target.value);
+                                }
+                              }}
+                              placeholder="Indikator Sasaran Renstra OPD..."
+                              className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-indigo-500 rounded-md text-xs resize-y focus:outline-hidden transition leading-relaxed text-slate-800"
+                            />
+                            {opdSpan > 1 && (
+                              <div className="text-[10px] text-indigo-700 font-medium px-1.5 py-0.5 bg-indigo-100/60 rounded inline-flex items-center gap-1 self-start">
+                                <Layers className="w-3 h-3 text-indigo-600" />
+                                <span>Indikator Renstra ({opdSpan} Baris)</span>
+                              </div>
+                            )}
+                          </div>
                         </td>
                       )}
 
@@ -2780,27 +2945,54 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
                         </td>
                       )}
 
-                      {/* Program Prioritas terkait di RPJMN/Indikator Program (Merged with Program) */}
+                      {/* Program Prioritas terkait di RPJMN/Indikator Program (Dropdown: Terkait / Tidak Terkait) */}
                       {showProgram && (
                         <td
                           rowSpan={progSpan}
-                          className={`p-1.5 border-r border-slate-200 align-top min-w-[220px] ${
+                          className={`p-1.5 border-r border-slate-200 align-top min-w-[210px] ${
                             progSpan > 1 ? 'bg-slate-50/40' : ''
                           }`}
                         >
-                          <textarea
-                            rows={Math.max(2, progSpan * 2)}
-                            value={item.prioritasRpjmn || ''}
-                            onChange={e => {
-                              if (progSpan > 1) {
-                                handleMergedCellChange('prioritasRpjmn', progIndices, e.target.value);
-                              } else {
-                                handleCellChange(item.id, 'prioritasRpjmn', e.target.value);
-                              }
-                            }}
-                            placeholder="Keterkaitan Prioritas Nasional RPJMN..."
-                            className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-blue-500 rounded-md text-xs resize-y focus:outline-hidden transition leading-relaxed text-slate-800"
-                          />
+                          <div className="flex flex-col h-full justify-start gap-1">
+                            <select
+                              value={item.prioritasRpjmn || ''}
+                              onChange={e => {
+                                if (progSpan > 1) {
+                                  handleMergedCellChange('prioritasRpjmn', progIndices, e.target.value);
+                                } else {
+                                  handleCellChange(item.id, 'prioritasRpjmn', e.target.value);
+                                }
+                              }}
+                              className={`w-full p-2 border rounded-md text-xs transition cursor-pointer focus:outline-hidden ${
+                                item.prioritasRpjmn === 'Terkait dengan Prioritas Nasional'
+                                  ? 'bg-emerald-50 border-emerald-300 text-emerald-900 font-bold'
+                                  : item.prioritasRpjmn === 'Tidak Terkait'
+                                  ? 'bg-slate-50 border-slate-300 text-slate-700 font-medium'
+                                  : 'bg-amber-50/50 border-amber-200 text-amber-900 font-medium hover:bg-white'
+                              }`}
+                            >
+                              <option value="">-- Pilih Keterkaitan RPJMN --</option>
+                              <option value="Terkait dengan Prioritas Nasional">
+                                Terkait dengan Prioritas Nasional
+                              </option>
+                              <option value="Tidak Terkait">
+                                Tidak Terkait
+                              </option>
+                              {/* Pertahankan opsi sebelumnya jika terdapat teks detail */}
+                              {item.prioritasRpjmn &&
+                                item.prioritasRpjmn !== 'Terkait dengan Prioritas Nasional' &&
+                                item.prioritasRpjmn !== 'Tidak Terkait' && (
+                                  <option value={item.prioritasRpjmn}>
+                                    {item.prioritasRpjmn}
+                                  </option>
+                                )}
+                            </select>
+                            {progSpan > 1 && (
+                              <span className="text-[10px] text-slate-500 font-medium px-1.5 py-0.5 bg-slate-200/50 rounded inline-block self-start">
+                                {progSpan} Indikator
+                              </span>
+                            )}
+                          </div>
                         </td>
                       )}
 
