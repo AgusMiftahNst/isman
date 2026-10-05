@@ -422,14 +422,16 @@ export const FormatPKPTBerbasisRisikoView: React.FC<FormatPKPTBerbasisRisikoView
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={handleManualSync}
-              disabled={isSyncing}
-              className="px-4 py-2.5 bg-gradient-to-r from-indigo-500 to-blue-500 hover:from-indigo-400 hover:to-blue-400 disabled:opacity-50 text-white font-bold rounded-xl text-xs flex items-center gap-2 shadow-lg shadow-indigo-500/20 transition transform active:scale-95"
-            >
-              <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
-              <span>{isSyncing ? 'Menyinkronkan...' : 'Sinkronisasi Data'}</span>
-            </button>
+            {isAdmin && (
+              <button
+                onClick={handleManualSync}
+                disabled={isSyncing}
+                className="px-4 py-2.5 bg-gradient-to-r from-indigo-500 to-blue-500 hover:from-indigo-400 hover:to-blue-400 disabled:opacity-50 text-white font-bold rounded-xl text-xs flex items-center gap-2 shadow-lg shadow-indigo-500/20 transition transform active:scale-95"
+              >
+                <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
+                <span>{isSyncing ? 'Menyinkronkan...' : 'Sinkronisasi Data'}</span>
+              </button>
+            )}
             <button
               onClick={() => setShowGuide(!showGuide)}
               className="px-3.5 py-2.5 bg-indigo-800/60 hover:bg-indigo-700/80 text-indigo-100 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition border border-indigo-700/50"
@@ -563,14 +565,20 @@ export const FormatPKPTBerbasisRisikoView: React.FC<FormatPKPTBerbasisRisikoView
               Format PKPT tidak diisi secara otomatis. Silakan tekan tombol <strong>Sinkronisasi Data</strong> di bawah untuk menarik dan mengompilasi kegiatan dari <strong>Menu 11 (Usulan PBBR)</strong> dan <strong>Menu 12 (Mandatory Regulasi)</strong>, yang otomatis disesuaikan dengan <strong>Menu 13</strong>.
             </p>
             <div className="pt-2">
-              <button
-                onClick={handleManualSync}
-                disabled={isSyncing}
-                className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-lg inline-flex items-center gap-2 transition transform active:scale-95"
-              >
-                <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
-                <span>{isSyncing ? 'Sedang Menyinkronkan...' : 'Sinkronisasi Data Sekarang'}</span>
-              </button>
+              {isAdmin ? (
+                <button
+                  onClick={handleManualSync}
+                  disabled={isSyncing}
+                  className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-lg inline-flex items-center gap-2 transition transform active:scale-95"
+                >
+                  <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
+                  <span>{isSyncing ? 'Sedang Menyinkronkan...' : 'Sinkronisasi Data Sekarang'}</span>
+                </button>
+              ) : (
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2.5 font-medium inline-block">
+                  Silakan hubungi Administrator untuk melakukan kompilasi & sinkronisasi data PKPT awal.
+                </p>
+              )}
             </div>
           </div>
         </div>
