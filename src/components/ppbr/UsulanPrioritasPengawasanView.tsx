@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { UsulanPrioritasPengawasanItem, PrioritasProgramRPJMDItem } from './ppbrData';
 import { exportToExcel, exportToPdf } from './ppbrExport';
 import { ConfirmModal } from '../common/ConfirmModal';
+import { getScopedKey, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
 import {
   Target,
   Edit3,
@@ -33,15 +34,21 @@ export const PILIHAN_JENIS_PENGAWASAN = [
 
 export interface UsulanPrioritasPengawasanViewProps {
   isAdmin?: boolean;
+  year?: string;
 }
 
-export const UsulanPrioritasPengawasanView: React.FC<UsulanPrioritasPengawasanViewProps> = ({ isAdmin: isAdminProp }) => {
+export const UsulanPrioritasPengawasanView: React.FC<UsulanPrioritasPengawasanViewProps> = ({ isAdmin: isAdminProp, year }) => {
+  const currentYear = year || getSelectedYear();
+  const storageKey = getScopedKey('ppbr_usulan_pengawasan', currentYear);
+  const m8StorageKey = getScopedKey('ppbr_prioritas_program', currentYear);
+
   const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
     try {
       const saved = localStorage.getItem('isman_user');
       if (saved) {
         const u = JSON.parse(saved);
-        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.role === 'Operator' || u.role === 'Inspektur' || u.username?.toLowerCase() === 'admin' || u.username?.toLowerCase() === 'inspektur';
+        if (u.role === 'Operator') return false;
+        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.username?.toLowerCase() === 'admin';
       }
     } catch (_) {}
     return true;
@@ -49,13 +56,13 @@ export const UsulanPrioritasPengawasanView: React.FC<UsulanPrioritasPengawasanVi
 
   // Baca data dari Menu 8 (Prioritas Program RPJMD)
   const getMenu8Data = (): PrioritasProgramRPJMDItem[] => {
-    const saved = localStorage.getItem('ppbr_prioritas_program');
+    const saved = localStorage.getItem(m8StorageKey);
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) return parsed;
       } catch (e) {
-        console.error('Error reading ppbr_prioritas_program', e);
+        console.error('Error reading ' + m8StorageKey, e);
       }
     }
     return [];
@@ -96,7 +103,7 @@ export const UsulanPrioritasPengawasanView: React.FC<UsulanPrioritasPengawasanVi
           alokasiMandays: 0
         }));
         setData(resetItems);
-        localStorage.setItem('ppbr_usulan_pengawasan', JSON.stringify(resetItems));
+        localStorage.setItem(storageKey, JSON.stringify(resetItems));
         window.dispatchEvent(new Event('ppbr_data_updated'));
       }
     });
@@ -116,7 +123,9 @@ export const UsulanPrioritasPengawasanView: React.FC<UsulanPrioritasPengawasanVi
     if (m8List.length === 0) {
       setIsMenu8Filled(false);
       setData([]);
-      localStorage.setItem('ppbr_usulan_pengawasan', JSON.stringify([]));
+      if (currentYear === DEFAULT_YEAR) {
+        localStorage.setItem(storageKey, JSON.stringify([]));
+      }
       return;
     }
 
@@ -124,7 +133,7 @@ export const UsulanPrioritasPengawasanView: React.FC<UsulanPrioritasPengawasanVi
 
     // Ambil jenis pengawasan yang sudah pernah diatur oleh user
     let existingCustom = new Map<string, { jenis: string; mandays: number }>();
-    const saved = localStorage.getItem('ppbr_usulan_pengawasan');
+    const saved = localStorage.getItem(storageKey);
     if (saved) {
       try {
         const parsed: UsulanPrioritasPengawasanItem[] = JSON.parse(saved);
@@ -138,7 +147,7 @@ export const UsulanPrioritasPengawasanView: React.FC<UsulanPrioritasPengawasanVi
           }
         });
       } catch (e) {
-        console.error('Error reading ppbr_usulan_pengawasan', e);
+        console.error('Error reading ' + storageKey, e);
       }
     }
 
@@ -189,20 +198,20 @@ export const UsulanPrioritasPengawasanView: React.FC<UsulanPrioritasPengawasanVi
     });
 
     setData(generatedUsulan);
-    localStorage.setItem('ppbr_usulan_pengawasan', JSON.stringify(generatedUsulan));
+    localStorage.setItem(storageKey, JSON.stringify(generatedUsulan));
     window.dispatchEvent(new Event('ppbr_data_updated'));
   };
 
   // Muat data saat komponen aktif
   useEffect(() => {
     syncFromMenu8();
-  }, []);
+  }, [currentYear]);
 
   // Update inline jenis pengawasan
   const handleUpdateJenisPengawasan = (item: UsulanPrioritasPengawasanItem, newJenis: string) => {
     const updated = data.map(d => (d.id === item.id ? { ...d, jenisPengawasan: newJenis } : d));
     setData(updated);
-    localStorage.setItem('ppbr_usulan_pengawasan', JSON.stringify(updated));
+    localStorage.setItem(storageKey, JSON.stringify(updated));
     window.dispatchEvent(new Event('ppbr_data_updated'));
   };
 
@@ -222,7 +231,7 @@ export const UsulanPrioritasPengawasanView: React.FC<UsulanPrioritasPengawasanVi
     );
 
     setData(updated);
-    localStorage.setItem('ppbr_usulan_pengawasan', JSON.stringify(updated));
+    localStorage.setItem(storageKey, JSON.stringify(updated));
     window.dispatchEvent(new Event('ppbr_data_updated'));
     setShowEditModal(false);
     setEditingItem(null);
@@ -304,13 +313,15 @@ export const UsulanPrioritasPengawasanView: React.FC<UsulanPrioritasPengawasanVi
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={syncFromMenu8}
-              className="px-4 py-2 bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-400 hover:to-indigo-400 text-white font-bold rounded-xl text-xs flex items-center gap-2 shadow-lg shadow-blue-500/20 transition transform active:scale-95"
-            >
-              <RefreshCw className="w-4 h-4" />
-              <span>Sinkronkan Ulang dari Menu 8</span>
-            </button>
+            {isAdmin && (
+              <button
+                onClick={syncFromMenu8}
+                className="px-4 py-2 bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-400 hover:to-indigo-400 text-white font-bold rounded-xl text-xs flex items-center gap-2 shadow-lg shadow-blue-500/20 transition transform active:scale-95"
+              >
+                <RefreshCw className="w-4 h-4" />
+                <span>Sinkronkan Ulang dari Menu 8</span>
+              </button>
+            )}
             {isAdmin && data.length > 0 && (
               <button
                 onClick={requestResetPenilaian}
