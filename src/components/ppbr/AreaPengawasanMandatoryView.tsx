@@ -633,16 +633,18 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            {/* Manual Sync / Refresh Button */}
-            <button
-              onClick={handleManualSync}
-              disabled={isManualSyncing}
-              className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition disabled:opacity-50"
-              title="Sinkronkan & tarik perubahan terbaru dari Cloud Firestore"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 text-blue-400 ${isManualSyncing ? 'animate-spin' : ''}`} />
-              <span>{isManualSyncing ? 'Sinkronisasi...' : 'Sinkronkan'}</span>
-            </button>
+            {/* Manual Sync / Refresh Button (Khusus Admin) */}
+            {isAdmin && (
+              <button
+                onClick={handleManualSync}
+                disabled={isManualSyncing}
+                className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition disabled:opacity-50"
+                title="Sinkronkan & tarik perubahan terbaru dari Cloud Firestore"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 text-blue-400 ${isManualSyncing ? 'animate-spin' : ''}`} />
+                <span>{isManualSyncing ? 'Sinkronisasi...' : 'Sinkronkan'}</span>
+              </button>
+            )}
 
             {/* Storage Input & Manager Button (Admin Only) */}
             {isAdmin && (
