@@ -269,7 +269,8 @@ export const detectOPDForProgram = (
 // Helper: Normalisasi data Audit Universe (Forward-fill Program & OPD untuk baris indikator tanpa nama program)
 export const normalizeAuditUniverseData = (
   items: AuditUniverseItem[],
-  rsoContexts: any[] = []
+  rsoContexts: any[] = [],
+  allowAutoFillOPD: boolean = true
 ): { normalized: AuditUniverseItem[]; hasChanges: boolean } => {
   if (!items || items.length === 0) return { normalized: [], hasChanges: false };
   let hasChanges = false;
@@ -284,7 +285,6 @@ export const normalizeAuditUniverseData = (
   for (let i = 1; i < result.length; i++) {
     const prev = result[i - 1];
     const curr = result[i];
-
     const prevProg = (prev.programRpjmd || '').trim();
     const currProg = (curr.programRpjmd || '').trim();
 
@@ -320,17 +320,19 @@ export const normalizeAuditUniverseData = (
     }
   }
 
-  // Step 1.5: Auto-fill OPD untuk nama program spesifik yang belum memiliki OPD
-  result.forEach(item => {
-    const prog = (item.programRpjmd || '').trim();
-    if (prog && (!item.opdPengampu || item.opdPengampu.trim() === '')) {
-      const detected = detectOPDForProgram(prog, rsoContexts);
-      if (detected) {
-        item.opdPengampu = detected.opd;
-        hasChanges = true;
+  // Step 1.5: Auto-fill OPD untuk nama program spesifik yang belum memiliki OPD (hanya jika diizinkan / Admin)
+  if (allowAutoFillOPD) {
+    result.forEach(item => {
+      const prog = (item.programRpjmd || '').trim();
+      if (prog && (!item.opdPengampu || item.opdPengampu.trim() === '')) {
+        const detected = detectOPDForProgram(prog, rsoContexts);
+        if (detected) {
+          item.opdPengampu = detected.opd;
+          hasChanges = true;
+        }
       }
-    }
-  });
+    });
+  }
 
   // Step 2: Unify OPD, Irban, Renstra & Faktor Risiko untuk setiap Program RPJMD yang sama
   interface ProgramCanonicalData {
@@ -953,8 +955,8 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
           ...item,
           [field]: field === 'anggaran' ? Number(value) || 0 : value
         };
-        // Auto-detect OPD jika nama program spesifik diinput/diubah dan OPD belum terisi
-        if (field === 'programRpjmd' && (!item.opdPengampu || item.opdPengampu.trim() === '')) {
+        // Auto-detect OPD jika nama program spesifik diinput/diubah dan OPD belum terisi (Khusus Admin)
+        if (isAdmin && field === 'programRpjmd' && (!item.opdPengampu || item.opdPengampu.trim() === '')) {
           const detected = detectOPDForProgram(value, rsoContexts);
           if (detected) {
             next.opdPengampu = detected.opd;
@@ -991,8 +993,8 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
           ...item,
           [field]: field === 'anggaran' ? Number(value) || 0 : value
         };
-        // Auto-detect OPD jika nama program spesifik diinput/diubah dan OPD belum terisi
-        if (field === 'programRpjmd' && (!item.opdPengampu || item.opdPengampu.trim() === '')) {
+        // Auto-detect OPD jika nama program spesifik diinput/diubah dan OPD belum terisi (Khusus Admin)
+        if (isAdmin && field === 'programRpjmd' && (!item.opdPengampu || item.opdPengampu.trim() === '')) {
           const detected = detectOPDForProgram(value, rsoContexts);
           if (detected) {
             next.opdPengampu = detected.opd;
@@ -1827,16 +1829,18 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
               )}
             </div>
 
-            {/* Manual Sync / Refresh Button */}
-            <button
-              onClick={handleManualSync}
-              disabled={isManualSyncing}
-              className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition disabled:opacity-50"
-              title="Sinkronkan & tarik perubahan terbaru dari Cloud Firestore"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 text-blue-400 ${isManualSyncing ? 'animate-spin' : ''}`} />
-              <span>{isManualSyncing ? 'Sinkronisasi...' : 'Sinkronkan'}</span>
-            </button>
+            {/* Manual Sync / Refresh Button (Khusus Admin) */}
+            {isAdmin && (
+              <button
+                onClick={handleManualSync}
+                disabled={isManualSyncing}
+                className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition disabled:opacity-50"
+                title="Sinkronkan & tarik perubahan terbaru dari Cloud Firestore"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 text-blue-400 ${isManualSyncing ? 'animate-spin' : ''}`} />
+                <span>{isManualSyncing ? 'Sinkronisasi...' : 'Sinkronkan'}</span>
+              </button>
+            )}
 
             <button
               onClick={() => setMergeViewMode(!mergeViewMode)}
@@ -1861,15 +1865,18 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
                 <span>Merge Program & OPD</span>
               </button>
             )}
-            <button
-              type="button"
-              onClick={handleAutoFillOPDFromRSO}
-              className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition"
-              title="Isi otomatis nama Dinas/OPD yang masih kosong untuk program spesifik berdasarkan RSO/ROO dan Nomenklatur"
-            >
-              <Sparkles className="w-4 h-4 text-amber-400" />
-              <span>Auto-Fill OPD (RSO)</span>
-            </button>
+            {/* Auto-Fill OPD dari RSO (Khusus Admin) */}
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={handleAutoFillOPDFromRSO}
+                className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition"
+                title="Isi otomatis nama Dinas/OPD yang masih kosong untuk program spesifik berdasarkan RSO/ROO dan Nomenklatur"
+              >
+                <Sparkles className="w-4 h-4 text-amber-400" />
+                <span>Auto-Fill OPD (RSO)</span>
+              </button>
+            )}
             <button
               onClick={handleExportExcel}
               className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition shadow-xs"
@@ -2539,8 +2546,8 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
                               placeholder="Contoh: Dinas Pendidikan"
                               className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-blue-500 rounded-md text-xs font-semibold text-slate-900 focus:outline-hidden transition"
                             />
-                            {/* Rekomendasi/Saran OPD jika masih kosong dan terdeteksi program spesifik */}
-                            {(!item.opdPengampu || item.opdPengampu.trim() === '') && (() => {
+                            {/* Rekomendasi/Saran OPD jika masih kosong dan terdeteksi program spesifik (Khusus Admin) */}
+                            {isAdmin && (!item.opdPengampu || item.opdPengampu.trim() === '') && (() => {
                               const detected = detectOPDForProgram(item.programRpjmd || '', rsoContexts);
                               if (!detected) return null;
                               return (
