@@ -1,8 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { db } from '../../lib/firebase';
+import { doc, onSnapshot, setDoc, getDoc } from 'firebase/firestore';
 import { PrioritasUnitKerjaOPDItem, INITIAL_PRIORITAS_OPD } from './ppbrData';
 import { exportToExcel, exportToPdf } from './ppbrExport';
 import { ConfirmModal } from '../common/ConfirmModal';
-import { getScopedKey, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
+import { getScopedKey, getScopedPPBRDocId, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
 import {
   getAuditUniverseOPDs,
   getFaktorAnggaranMap,
@@ -30,7 +32,9 @@ import {
   AlertTriangle,
   Layers,
   ShieldCheck,
-  TrendingUp
+  TrendingUp,
+  Cloud,
+  AlertCircle
 } from 'lucide-react';
 
 export interface PrioritasUnitKerjaOPDViewProps {
@@ -41,6 +45,7 @@ export interface PrioritasUnitKerjaOPDViewProps {
 export const PrioritasUnitKerjaOPDView: React.FC<PrioritasUnitKerjaOPDViewProps> = ({ isAdmin: isAdminProp, year }) => {
   const currentYear = year || getSelectedYear();
   const storageKey = getScopedKey('ppbr_prioritas_opd', currentYear);
+  const docId = getScopedPPBRDocId('prioritas_opd', currentYear);
 
   const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
     try {
@@ -53,6 +58,13 @@ export const PrioritasUnitKerjaOPDView: React.FC<PrioritasUnitKerjaOPDViewProps>
     } catch (_) {}
     return true;
   })();
+
+  // Cloud Real-time Synchronization States
+  const [cloudStatus, setCloudStatus] = useState<'synced' | 'saving' | 'offline' | 'error'>('synced');
+  const [lastSyncedTime, setLastSyncedTime] = useState<string | null>(null);
+  const [isManualSyncing, setIsManualSyncing] = useState<boolean>(false);
+  const isRemoteUpdateRef = useRef<boolean>(false);
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const [data, setData] = useState<PrioritasUnitKerjaOPDItem[]>(() => {
     const saved = localStorage.getItem(storageKey);
@@ -68,6 +80,63 @@ export const PrioritasUnitKerjaOPDView: React.FC<PrioritasUnitKerjaOPDViewProps>
     }
     return currentYear === DEFAULT_YEAR ? INITIAL_PRIORITAS_OPD : [];
   });
+
+  // Firestore Real-time Listener (Semua laptop sinkron ke Cloud)
+  useEffect(() => {
+    const docRef = doc(db, 'ppbr_data', docId);
+    const unsub = onSnapshot(docRef, (snap) => {
+      if (snap.exists()) {
+        const snapData = snap.data();
+        if (snapData && Array.isArray(snapData.items)) {
+          try {
+            const localRaw = localStorage.getItem(storageKey);
+            if (localRaw) {
+              const localParsed = JSON.parse(localRaw);
+              if (Array.isArray(localParsed) && localParsed.length > snapData.items.length) {
+                console.log(`[Auto-Sync OPD] Mempromosikan data lokal (${localParsed.length} OPD vs cloud ${snapData.items.length}) ke Cloud.`);
+                setDoc(docRef, {
+                  items: localParsed,
+                  updatedAt: new Date().toISOString(),
+                  title: `Prioritas Unit Kerja OPD ${currentYear}`
+                }, { merge: true }).catch(() => {});
+                return;
+              }
+            }
+          } catch (_) {}
+
+          isRemoteUpdateRef.current = true;
+          const ranked = sortAndRankMenu9(snapData.items);
+          setData(ranked);
+          localStorage.setItem(storageKey, JSON.stringify(ranked));
+          setCloudStatus('synced');
+          if (snapData.updatedAt) {
+            try {
+              setLastSyncedTime(new Date(snapData.updatedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+            } catch (_) {
+              setLastSyncedTime(new Date().toLocaleTimeString('id-ID'));
+            }
+          }
+          setTimeout(() => { isRemoteUpdateRef.current = false; }, 300);
+        }
+      } else {
+        if (data.length > 0) {
+          setDoc(docRef, {
+            items: data,
+            updatedAt: new Date().toISOString(),
+            title: `Prioritas Unit Kerja OPD ${currentYear}`
+          }, { merge: true }).catch(() => {});
+        }
+      }
+    }, (err) => {
+      console.warn('Firestore Prioritas OPD listener warning:', err);
+      setCloudStatus('offline');
+    });
+
+    return () => {
+      unsub();
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    };
+  }, [docId, currentYear, storageKey]);
 
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
@@ -117,10 +186,68 @@ export const PrioritasUnitKerjaOPDView: React.FC<PrioritasUnitKerjaOPDViewProps>
     permintaanKDH: false,
   });
 
-  const handleSaveData = (newData: PrioritasUnitKerjaOPDItem[]) => {
+  const handleSaveData = (newData: PrioritasUnitKerjaOPDItem[], forceInstantCloud: boolean = false) => {
     const ranked = sortAndRankMenu9(newData);
     setData(ranked);
     localStorage.setItem(storageKey, JSON.stringify(ranked));
+
+    if (isRemoteUpdateRef.current) return;
+
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    const saveToFirestore = async () => {
+      try {
+        setCloudStatus('saving');
+        const docRef = doc(db, 'ppbr_data', docId);
+        await setDoc(docRef, {
+          items: ranked,
+          updatedAt: new Date().toISOString(),
+          title: `Prioritas Unit Kerja OPD ${currentYear}`
+        }, { merge: true });
+        setCloudStatus('synced');
+        setLastSyncedTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+      } catch (e) {
+        console.warn('Failed saving Menu 9 to Firestore:', e);
+        setCloudStatus('offline');
+      }
+    };
+
+    if (forceInstantCloud) {
+      saveToFirestore();
+    } else {
+      setCloudStatus('saving');
+      saveTimeoutRef.current = setTimeout(saveToFirestore, 800);
+    }
+  };
+
+  const handleManualCloudSync = async () => {
+    setIsManualSyncing(true);
+    try {
+      const docRef = doc(db, 'ppbr_data', docId);
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        const snapData = snap.data();
+        if (snapData && Array.isArray(snapData.items)) {
+          const ranked = sortAndRankMenu9(snapData.items);
+          setData(ranked);
+          localStorage.setItem(storageKey, JSON.stringify(ranked));
+          setCloudStatus('synced');
+          setLastSyncedTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+        }
+      } else {
+        await setDoc(docRef, {
+          items: data,
+          updatedAt: new Date().toISOString(),
+          title: `Prioritas Unit Kerja OPD ${currentYear}`
+        }, { merge: true });
+        setCloudStatus('synced');
+        setLastSyncedTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+      }
+    } catch (e) {
+      console.warn('Manual sync Menu 9 failed:', e);
+      setCloudStatus('offline');
+    } finally {
+      setIsManualSyncing(false);
+    }
   };
 
   // Sinkronisasi otomatis dari Menu 1, 4, 5, 6, 7 khusus OPD (fokus ke OPD, tanpa program)
@@ -553,6 +680,45 @@ export const PrioritasUnitKerjaOPDView: React.FC<PrioritasUnitKerjaOPDViewProps>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {/* Live Cloud Sync Status Badge */}
+            <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
+              cloudStatus === 'synced'
+                ? 'bg-emerald-950/70 border-emerald-500/40 text-emerald-300'
+                : cloudStatus === 'saving'
+                ? 'bg-amber-950/70 border-amber-500/40 text-amber-300 animate-pulse'
+                : 'bg-rose-950/70 border-rose-500/40 text-rose-300'
+            }`}>
+              {cloudStatus === 'synced' ? (
+                <>
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <Cloud className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Cloud Terhubung {lastSyncedTime ? `(${lastSyncedTime})` : ''}</span>
+                </>
+              ) : cloudStatus === 'saving' ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 text-amber-400 animate-spin" />
+                  <span>Menyimpan ke Cloud...</span>
+                </>
+              ) : (
+                <>
+                  <AlertCircle className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Tersimpan Lokal</span>
+                </>
+              )}
+            </div>
+
+            {isAdmin && (
+              <button
+                onClick={handleManualCloudSync}
+                disabled={isManualSyncing}
+                className="px-3 py-1.5 bg-cyan-900/60 hover:bg-cyan-800/80 text-cyan-200 border border-cyan-700/50 rounded-xl text-xs font-medium flex items-center gap-1.5 transition active:scale-95 disabled:opacity-50"
+                title="Tarik & sinkronkan data terbaru dari Cloud Firestore"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isManualSyncing ? 'animate-spin text-cyan-400' : 'text-cyan-300'}`} />
+                <span>{isManualSyncing ? 'Menyinkronkan...' : 'Sinkron Cloud'}</span>
+              </button>
+            )}
+
             <button
               onClick={() => setShowSyncModal(true)}
               className="px-4 py-2 bg-gradient-to-r from-cyan-500 to-teal-500 hover:from-cyan-400 hover:to-teal-400 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-2 shadow-lg shadow-cyan-500/20 transition transform active:scale-95"
