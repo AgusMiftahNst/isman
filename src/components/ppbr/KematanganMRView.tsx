@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { db } from '../../lib/firebase';
+import { doc, onSnapshot, setDoc, getDoc } from 'firebase/firestore';
 import { KematanganMRItem, INITIAL_KEMATANGAN_MR, AuditUniverseItem, INITIAL_AUDIT_UNIVERSE } from './ppbrData';
 import { exportToExcel, exportToPdf } from './ppbrExport';
 import { ConfirmModal } from '../common/ConfirmModal';
-import { getScopedKey, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
+import { getScopedKey, getScopedPPBRDocId, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
 import {
   BarChart2,
   Plus,
@@ -22,7 +24,8 @@ import {
   CheckSquare,
   Square,
   Sparkles,
-  ArrowRight
+  ArrowRight,
+  Cloud
 } from 'lucide-react';
 
 interface SyncedOpdItem {
@@ -43,6 +46,7 @@ export interface KematanganMRViewProps {
 export const KematanganMRView: React.FC<KematanganMRViewProps> = ({ isAdmin: isAdminProp, year }) => {
   const currentYear = year || getSelectedYear();
   const storageKey = getScopedKey('ppbr_kematangan_mr', currentYear);
+  const docId = getScopedPPBRDocId('kematangan_mr', currentYear);
 
   const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
     try {
@@ -56,10 +60,80 @@ export const KematanganMRView: React.FC<KematanganMRViewProps> = ({ isAdmin: isA
     return true;
   })();
 
+  // Cloud Real-time Synchronization States
+  const [cloudStatus, setCloudStatus] = useState<'synced' | 'saving' | 'offline' | 'error'>('synced');
+  const [lastSyncedTime, setLastSyncedTime] = useState<string | null>(null);
+  const [isManualSyncing, setIsManualSyncing] = useState<boolean>(false);
+  const isRemoteUpdateRef = useRef<boolean>(false);
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
   const [data, setData] = useState<KematanganMRItem[]>(() => {
     const saved = localStorage.getItem(storageKey);
-    return saved ? JSON.parse(saved) : (currentYear === DEFAULT_YEAR ? INITIAL_KEMATANGAN_MR : []);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      } catch (_) {}
+    }
+    return currentYear === DEFAULT_YEAR ? INITIAL_KEMATANGAN_MR : [];
   });
+
+  // Firestore Real-time Listener (Semua laptop sinkron ke Cloud)
+  useEffect(() => {
+    const docRef = doc(db, 'ppbr_data', docId);
+    const unsub = onSnapshot(docRef, (snap) => {
+      if (snap.exists()) {
+        const snapData = snap.data();
+        if (snapData && Array.isArray(snapData.items)) {
+          // Jika laptop ini punya data lokal lebih lengkap, promosikan ke cloud
+          try {
+            const localRaw = localStorage.getItem(storageKey);
+            if (localRaw) {
+              const localParsed = JSON.parse(localRaw);
+              if (Array.isArray(localParsed) && localParsed.length > snapData.items.length) {
+                console.log(`[Auto-Sync KMR] Laptop ini memiliki data lokal lebih banyak (${localParsed.length} vs cloud ${snapData.items.length}), mengunggah ke Cloud.`);
+                setDoc(docRef, {
+                  items: localParsed,
+                  updatedAt: new Date().toISOString(),
+                  title: `Tingkat Kematangan MR ${currentYear}`
+                }, { merge: true }).catch(() => {});
+                return;
+              }
+            }
+          } catch (_) {}
+
+          isRemoteUpdateRef.current = true;
+          setData(snapData.items);
+          localStorage.setItem(storageKey, JSON.stringify(snapData.items));
+          setCloudStatus('synced');
+          if (snapData.updatedAt) {
+            try {
+              setLastSyncedTime(new Date(snapData.updatedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+            } catch (_) {
+              setLastSyncedTime(new Date().toLocaleTimeString('id-ID'));
+            }
+          }
+          setTimeout(() => { isRemoteUpdateRef.current = false; }, 300);
+        }
+      } else {
+        if (data.length > 0) {
+          setDoc(docRef, {
+            items: data,
+            updatedAt: new Date().toISOString(),
+            title: `Tingkat Kematangan MR ${currentYear}`
+          }, { merge: true }).catch(() => {});
+        }
+      }
+    }, (err) => {
+      console.warn('Firestore Kematangan MR listener warning:', err);
+      setCloudStatus('offline');
+    });
+
+    return () => {
+      unsub();
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    };
+  }, [docId, currentYear, storageKey]);
 
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
@@ -152,9 +226,66 @@ export const KematanganMRView: React.FC<KematanganMRViewProps> = ({ isAdmin: isA
     }
   };
 
-  const handleSaveData = (newData: KematanganMRItem[]) => {
+  const handleSaveData = (newData: KematanganMRItem[], forceInstantCloud: boolean = false) => {
     setData(newData);
     localStorage.setItem(storageKey, JSON.stringify(newData));
+
+    if (isRemoteUpdateRef.current) return;
+
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    const saveToFirestore = async () => {
+      try {
+        setCloudStatus('saving');
+        const docRef = doc(db, 'ppbr_data', docId);
+        await setDoc(docRef, {
+          items: newData,
+          updatedAt: new Date().toISOString(),
+          title: `Tingkat Kematangan MR ${currentYear}`
+        }, { merge: true });
+        setCloudStatus('synced');
+        setLastSyncedTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+      } catch (e) {
+        console.warn('Failed saving KMR to Firestore:', e);
+        setCloudStatus('offline');
+      }
+    };
+
+    if (forceInstantCloud) {
+      saveToFirestore();
+    } else {
+      setCloudStatus('saving');
+      saveTimeoutRef.current = setTimeout(saveToFirestore, 800);
+    }
+  };
+
+  const handleManualCloudSync = async () => {
+    setIsManualSyncing(true);
+    try {
+      const docRef = doc(db, 'ppbr_data', docId);
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        const snapData = snap.data();
+        if (snapData && Array.isArray(snapData.items)) {
+          setData(snapData.items);
+          localStorage.setItem(storageKey, JSON.stringify(snapData.items));
+          setCloudStatus('synced');
+          setLastSyncedTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+        }
+      } else {
+        await setDoc(docRef, {
+          items: data,
+          updatedAt: new Date().toISOString(),
+          title: `Tingkat Kematangan MR ${currentYear}`
+        }, { merge: true });
+        setCloudStatus('synced');
+        setLastSyncedTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+      }
+    } catch (e) {
+      console.warn('Manual sync KMR failed:', e);
+      setCloudStatus('offline');
+    } finally {
+      setIsManualSyncing(false);
+    }
   };
 
   const handleLevelChange = (id: string, newLevel: number) => {
@@ -557,6 +688,45 @@ export const KematanganMRView: React.FC<KematanganMRViewProps> = ({ isAdmin: isA
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {/* Live Cloud Sync Status Badge */}
+            <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
+              cloudStatus === 'synced'
+                ? 'bg-emerald-950/70 border-emerald-500/40 text-emerald-300'
+                : cloudStatus === 'saving'
+                ? 'bg-amber-950/70 border-amber-500/40 text-amber-300 animate-pulse'
+                : 'bg-rose-950/70 border-rose-500/40 text-rose-300'
+            }`}>
+              {cloudStatus === 'synced' ? (
+                <>
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <Cloud className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Cloud Terhubung {lastSyncedTime ? `(${lastSyncedTime})` : ''}</span>
+                </>
+              ) : cloudStatus === 'saving' ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 text-amber-400 animate-spin" />
+                  <span>Menyimpan ke Cloud...</span>
+                </>
+              ) : (
+                <>
+                  <AlertCircle className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Tersimpan Lokal</span>
+                </>
+              )}
+            </div>
+
+            {isAdmin && (
+              <button
+                onClick={handleManualCloudSync}
+                disabled={isManualSyncing}
+                className="px-3 py-1.5 bg-blue-900/60 hover:bg-blue-800/80 text-blue-200 border border-blue-700/50 rounded-xl text-xs font-medium flex items-center gap-1.5 transition active:scale-95 disabled:opacity-50"
+                title="Tarik & sinkronkan data terbaru dari Cloud Firestore"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isManualSyncing ? 'animate-spin text-cyan-400' : 'text-blue-300'}`} />
+                <span>{isManualSyncing ? 'Menyinkronkan...' : 'Sinkron Cloud'}</span>
+              </button>
+            )}
+
             <button
               onClick={() => setShowGuide(!showGuide)}
               className="px-3.5 py-2 bg-blue-800/60 hover:bg-blue-700/80 text-blue-100 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition border border-blue-700/50"
