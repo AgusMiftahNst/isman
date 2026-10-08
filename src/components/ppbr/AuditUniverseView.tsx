@@ -663,6 +663,23 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
       if (snap.exists()) {
         const snapData = snap.data();
         if (snapData && Array.isArray(snapData.items)) {
+          // Jika laptop ini menyimpan data lokal/backup yang jauh lebih lengkap (misal 100 atau 103 baris vs cloud baru 55)
+          try {
+            const rawBackup = localStorage.getItem('ppbr_audit_universe_local_backup') || localStorage.getItem(storageKey);
+            if (rawBackup) {
+              const parsedBackup = JSON.parse(rawBackup);
+              if (Array.isArray(parsedBackup) && parsedBackup.length > snapData.items.length) {
+                console.log(`[Auto-Sync AU] Laptop ini memiliki data lebih lengkap (${parsedBackup.length} baris vs cloud ${snapData.items.length}), mempromosikan ke Cloud master.`);
+                setDoc(auDocRef, {
+                  items: parsedBackup,
+                  updatedAt: new Date().toISOString(),
+                  title: `Audit Universe Master ${currentYear}`
+                }, { merge: true }).catch(() => {});
+                return;
+              }
+            }
+          } catch (_) {}
+
           isRemoteUpdateRef.current = true;
           const { normalized, hasChanges } = normalizeAuditUniverseData(snapData.items);
           setData(normalized);
@@ -728,7 +745,7 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
         clearTimeout(saveTimeoutRef.current);
       }
     };
-  }, []);
+  }, [docId, currentYear, storageKey]);
 
   const handleSaveIrbanList = (newList: string[]) => {
     setIrbanList(newList);
