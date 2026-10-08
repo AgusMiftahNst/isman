@@ -1,10 +1,13 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { PrioritasProgramRPJMDItem, INITIAL_PRIORITAS_RPJMD } from './ppbrData';
 import { exportToExcel, exportToPdf } from './ppbrExport';
 import { ConfirmModal } from '../common/ConfirmModal';
-import { getScopedKey, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
+import { getScopedKey, getScopedPPBRDocId, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
+import { db } from '../../lib/firebase';
+import { doc, onSnapshot, setDoc, getDoc } from 'firebase/firestore';
 import {
   getAuditUniversePrograms,
+  getAuditUniverseProgramsFromList,
   getFaktorAnggaranMap,
   getFaktorUnggulanMap,
   getFaktorTemuanMap,
@@ -34,7 +37,9 @@ import {
   Sparkles,
   ArrowRight,
   ShieldAlert,
-  Building2
+  Building2,
+  Cloud,
+  AlertCircle
 } from 'lucide-react';
 
 export interface PrioritasProgramRPJMDViewProps {
@@ -45,6 +50,7 @@ export interface PrioritasProgramRPJMDViewProps {
 export const PrioritasProgramRPJMDView: React.FC<PrioritasProgramRPJMDViewProps> = ({ isAdmin: isAdminProp, year }) => {
   const currentYear = year || getSelectedYear();
   const storageKey = getScopedKey('ppbr_prioritas_program', currentYear);
+  const docId = getScopedPPBRDocId('prioritas_program', currentYear);
 
   const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
     try {
@@ -72,6 +78,78 @@ export const PrioritasProgramRPJMDView: React.FC<PrioritasProgramRPJMDViewProps>
     }
     return currentYear === DEFAULT_YEAR ? INITIAL_PRIORITAS_RPJMD : [];
   });
+
+  // Cloud Real-time Synchronization States
+  const [cloudStatus, setCloudStatus] = useState<'synced' | 'saving' | 'offline' | 'error'>('synced');
+  const [lastSyncedTime, setLastSyncedTime] = useState<string | null>(null);
+  const [isManualSyncing, setIsManualSyncing] = useState<boolean>(false);
+  const isRemoteUpdateRef = useRef<boolean>(false);
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Firestore Real-time Listener: Memastikan seluruh laptop terhubung ke data master yang sama
+  useEffect(() => {
+    const docRef = doc(db, 'ppbr_data', docId);
+    let isInitialSnapshot = true;
+
+    const unsub = onSnapshot(docRef, (snap) => {
+      if (snap.exists()) {
+        const snapData = snap.data();
+        if (snapData && Array.isArray(snapData.items)) {
+          // Cek jika laptop ini memiliki data program lokal yang lebih lengkap (misal 103 atau 100 program vs cloud)
+          try {
+            const localSaved = localStorage.getItem(storageKey);
+            if (localSaved) {
+              const localParsed = JSON.parse(localSaved);
+              if (Array.isArray(localParsed) && localParsed.length > snapData.items.length) {
+                console.log(`[Auto-Sync Menu 8] Mempromosikan data lokal (${localParsed.length} program vs cloud ${snapData.items.length}) ke Cloud.`);
+                setDoc(docRef, {
+                  items: localParsed,
+                  updatedAt: new Date().toISOString(),
+                  title: `Prioritas Program RPJMD ${currentYear}`
+                }, { merge: true }).catch(() => {});
+                return;
+              }
+            }
+          } catch (_) {}
+
+          isRemoteUpdateRef.current = true;
+          const ranked = sortAndRankMenu8(snapData.items);
+          setData(ranked);
+          localStorage.setItem(storageKey, JSON.stringify(ranked));
+          setCloudStatus('synced');
+          if (snapData.updatedAt) {
+            try {
+              setLastSyncedTime(new Date(snapData.updatedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+            } catch (_) {
+              setLastSyncedTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+            }
+          }
+          setTimeout(() => {
+            isRemoteUpdateRef.current = false;
+          }, 300);
+        }
+      } else {
+        // Jika belum ada di Cloud:
+        // 1. Jika di laptop ini ada data lokal (misal 100 atau 103 program), simpan ke Cloud agar rekan lain melihat hal yang sama
+        if (data.length > 0) {
+          setDoc(docRef, {
+            items: data,
+            updatedAt: new Date().toISOString(),
+            title: `Prioritas Program RPJMD ${currentYear}`
+          }, { merge: true }).catch(err => console.warn('Initial push Menu 8 error:', err));
+        } else if (currentYear === DEFAULT_YEAR && isInitialSnapshot) {
+          // 2. Jika laptop baru dan Cloud masih kosong, sinkronkan dari Menu 1
+          performSyncFromMenus('full');
+        }
+      }
+      isInitialSnapshot = false;
+    }, (err) => {
+      console.warn('Firestore Menu 8 listener warning:', err?.message || err);
+      setCloudStatus('offline');
+    });
+
+    return () => unsub();
+  }, [docId, currentYear, storageKey]);
 
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
@@ -121,16 +199,90 @@ export const PrioritasProgramRPJMDView: React.FC<PrioritasProgramRPJMDViewProps>
     permintaanKDH: false,
   });
 
-  // Simpan data & peringkat
-  const handleSaveData = (newData: PrioritasProgramRPJMDItem[]) => {
+  // Simpan data & peringkat (otomatis sinkron ke Cloud Firestore)
+  const handleSaveData = (newData: PrioritasProgramRPJMDItem[], forceInstantCloud: boolean = false) => {
     const ranked = sortAndRankMenu8(newData);
     setData(ranked);
     localStorage.setItem(storageKey, JSON.stringify(ranked));
+
+    if (isRemoteUpdateRef.current) return;
+
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    const saveToFirestore = async () => {
+      try {
+        setCloudStatus('saving');
+        const docRef = doc(db, 'ppbr_data', docId);
+        await setDoc(docRef, {
+          items: ranked,
+          updatedAt: new Date().toISOString(),
+          title: `Prioritas Program RPJMD ${currentYear}`
+        }, { merge: true });
+        setCloudStatus('synced');
+        setLastSyncedTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+      } catch (e) {
+        console.warn('Failed saving Menu 8 to Firestore:', e);
+        setCloudStatus('offline');
+      }
+    };
+
+    if (forceInstantCloud) {
+      saveToFirestore();
+    } else {
+      setCloudStatus('saving');
+      saveTimeoutRef.current = setTimeout(saveToFirestore, 1200);
+    }
+  };
+
+  // Manual Sync Cloud Firestore (Khusus Admin)
+  const handleManualCloudSync = async () => {
+    setIsManualSyncing(true);
+    try {
+      const docRef = doc(db, 'ppbr_data', docId);
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        const snapData = snap.data();
+        if (snapData && Array.isArray(snapData.items)) {
+          const ranked = sortAndRankMenu8(snapData.items);
+          setData(ranked);
+          localStorage.setItem(storageKey, JSON.stringify(ranked));
+          setCloudStatus('synced');
+          setLastSyncedTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+        }
+      } else {
+        await setDoc(docRef, {
+          items: data,
+          updatedAt: new Date().toISOString(),
+          title: `Prioritas Program RPJMD ${currentYear}`
+        }, { merge: true });
+        setCloudStatus('synced');
+        setLastSyncedTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+      }
+    } catch (e) {
+      console.warn('Manual sync Menu 8 failed:', e);
+      setCloudStatus('offline');
+    } finally {
+      setIsManualSyncing(false);
+    }
   };
 
   // Fungsi sinkronisasi otomatis dari Menu 1, 4, 5, 6, 7
-  const performSyncFromMenus = (mode: 'full' | 'update_only' = 'full') => {
-    const menu1List = getAuditUniversePrograms(currentYear);
+  const performSyncFromMenus = async (mode: 'full' | 'update_only' = 'full') => {
+    // 1. Ambil data Menu 1 (Audit Universe) dari Cloud atau Cache
+    let menu1List = getAuditUniversePrograms(currentYear);
+    try {
+      const auSnap = await getDoc(doc(db, 'ppbr_data', getScopedPPBRDocId('audit_universe', currentYear)));
+      if (auSnap.exists()) {
+        const auItems = auSnap.data()?.items;
+        if (Array.isArray(auItems) && auItems.length > 0) {
+          const fromCloud = getAuditUniverseProgramsFromList(auItems);
+          if (fromCloud.length >= menu1List.length) {
+            menu1List = fromCloud;
+            localStorage.setItem(getScopedKey('ppbr_audit_universe', currentYear), JSON.stringify(auItems));
+          }
+        }
+      }
+    } catch (_) {}
+
     const anggaranMap = getFaktorAnggaranMap(currentYear);
     const unggulanMap = getFaktorUnggulanMap(currentYear);
     const temuanMap = getFaktorTemuanMap(currentYear);
@@ -193,25 +345,16 @@ export const PrioritasProgramRPJMDView: React.FC<PrioritasProgramRPJMDViewProps>
       });
     });
 
-    // Pertahankan program non-Menu 1 jika ada
-    if (mode === 'update_only') {
-      data.forEach(d => {
-        if (d.program && !menu1List.some(m => m.program.trim().toLowerCase() === d.program!.trim().toLowerCase())) {
-          resultList.push(d);
-        }
-      });
-    }
+    // Pertahankan program non-Menu 1 (program custom yang ditambah user) agar tidak terhapus
+    data.forEach(d => {
+      if (d.program && !menu1List.some(m => m.program.trim().toLowerCase() === d.program!.trim().toLowerCase())) {
+        resultList.push(d);
+      }
+    });
 
-    handleSaveData(resultList);
+    handleSaveData(resultList, true);
     setShowSyncModal(false);
   };
-
-  // Inisialisasi awal saat tabel kosong (hanya untuk tahun default 2026)
-  useEffect(() => {
-    if (data.length === 0 && currentYear === DEFAULT_YEAR) {
-      performSyncFromMenus('full');
-    }
-  }, []);
 
   // Toggle Permintaan KDH langsung di tabel
   const handleToggleKDH = (item: PrioritasProgramRPJMDItem) => {
@@ -530,13 +673,55 @@ export const PrioritasProgramRPJMDView: React.FC<PrioritasProgramRPJMDViewProps>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={() => setShowSyncModal(true)}
-              className="px-4 py-2 bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-2 shadow-lg shadow-teal-500/20 transition transform active:scale-95"
-            >
-              <RefreshCw className="w-4 h-4" />
-              <span>Sinkronisasi dari Menu 1, 4, 5, 6, 7</span>
-            </button>
+            {/* Live Cloud Sync Status Badge */}
+            <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
+              cloudStatus === 'synced'
+                ? 'bg-emerald-950/70 border-emerald-500/40 text-emerald-300'
+                : cloudStatus === 'saving'
+                ? 'bg-amber-950/70 border-amber-500/40 text-amber-300 animate-pulse'
+                : 'bg-rose-950/70 border-rose-500/40 text-rose-300'
+            }`}>
+              {cloudStatus === 'synced' ? (
+                <>
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <Cloud className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Cloud Terhubung {lastSyncedTime ? `(${lastSyncedTime})` : ''}</span>
+                </>
+              ) : cloudStatus === 'saving' ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 text-amber-400 animate-spin" />
+                  <span>Menyimpan ke Cloud...</span>
+                </>
+              ) : (
+                <>
+                  <AlertCircle className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Tersimpan Lokal (Offline)</span>
+                </>
+              )}
+            </div>
+
+            {/* Manual Sync Cloud Button (Khusus Admin) */}
+            {isAdmin && (
+              <button
+                onClick={handleManualCloudSync}
+                disabled={isManualSyncing}
+                className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition disabled:opacity-50"
+                title="Sinkronkan & tarik perubahan terbaru dari Cloud Firestore"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 text-teal-400 ${isManualSyncing ? 'animate-spin' : ''}`} />
+                <span>{isManualSyncing ? 'Sinkronisasi...' : 'Sinkronkan Cloud'}</span>
+              </button>
+            )}
+
+            {isAdmin && (
+              <button
+                onClick={() => setShowSyncModal(true)}
+                className="px-4 py-2 bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-2 shadow-lg shadow-teal-500/20 transition transform active:scale-95"
+              >
+                <RefreshCw className="w-4 h-4" />
+                <span>Sinkronisasi dari Menu 1, 4, 5, 6, 7</span>
+              </button>
+            )}
             <button
               onClick={() => setShowGuide(!showGuide)}
               className="px-3.5 py-2 bg-emerald-800/60 hover:bg-emerald-700/80 text-emerald-100 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition border border-emerald-700/50"
