@@ -33,6 +33,8 @@ import {
 } from 'lucide-react';
 
 import { getSelectedYear } from './ppbrYearHelper';
+import { usePPBRGlobalSync } from './ppbrCloudSync';
+import { Cloud, Wifi } from 'lucide-react';
 
 export interface PPBRMasterContainerProps {
   activeSubMenu?: string;
@@ -68,6 +70,9 @@ export const PPBRMasterContainer: React.FC<PPBRMasterContainerProps> = ({
 }) => {
   const [internalMenu, setInternalMenu] = useState<string>(activeSubMenu);
   const activeYear = year || getSelectedYear();
+
+  // Background Cloud Sync for all 14 menus across all laptops
+  const { syncedCount, lastGlobalSync } = usePPBRGlobalSync(activeYear);
 
   const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
     try {
