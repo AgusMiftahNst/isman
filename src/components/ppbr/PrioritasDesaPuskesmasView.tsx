@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { db } from '../../lib/firebase';
+import { doc, onSnapshot, setDoc, getDoc } from 'firebase/firestore';
 import { PrioritasDesaPuskesmasItem, INITIAL_PRIORITAS_DESA_PUSKESMAS } from './ppbrData';
 import { exportToExcel, exportToPdf } from './ppbrExport';
 import { ConfirmModal } from '../common/ConfirmModal';
-import { getScopedKey, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
-import { Landmark, Plus, Trash2, Edit3, X, Info, FileSpreadsheet, FileText, Search, Trophy, RotateCcw } from 'lucide-react';
+import { getScopedKey, getScopedPPBRDocId, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
+import { Landmark, Plus, Trash2, Edit3, X, Info, FileSpreadsheet, FileText, Search, Trophy, RotateCcw, Cloud, AlertCircle, RefreshCw } from 'lucide-react';
 
 export interface PrioritasDesaPuskesmasViewProps {
   isAdmin?: boolean;
@@ -12,7 +14,9 @@ export interface PrioritasDesaPuskesmasViewProps {
 
 export const PrioritasDesaPuskesmasView: React.FC<PrioritasDesaPuskesmasViewProps> = ({ isAdmin: isAdminProp, year }) => {
   const currentYear = year || getSelectedYear();
-  const storageKey = getScopedKey('ppbr_prioritas_desa_puskesmas', currentYear);
+  const storageKey = getScopedKey('ppbr_prioritas_desa', currentYear);
+  const oldStorageKey = getScopedKey('ppbr_prioritas_desa_puskesmas', currentYear);
+  const docId = getScopedPPBRDocId('prioritas_desa', currentYear);
 
   const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
     try {
@@ -26,10 +30,81 @@ export const PrioritasDesaPuskesmasView: React.FC<PrioritasDesaPuskesmasViewProp
     return true;
   })();
 
+  // Cloud Real-time Synchronization States
+  const [cloudStatus, setCloudStatus] = useState<'synced' | 'saving' | 'offline' | 'error'>('synced');
+  const [lastSyncedTime, setLastSyncedTime] = useState<string | null>(null);
+  const [isManualSyncing, setIsManualSyncing] = useState<boolean>(false);
+  const isRemoteUpdateRef = useRef<boolean>(false);
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
   const [data, setData] = useState<PrioritasDesaPuskesmasItem[]>(() => {
-    const saved = localStorage.getItem(storageKey);
-    return saved ? JSON.parse(saved) : (currentYear === DEFAULT_YEAR ? INITIAL_PRIORITAS_DESA_PUSKESMAS : []);
+    const saved = localStorage.getItem(storageKey) || localStorage.getItem(oldStorageKey);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      } catch (_) {}
+    }
+    return currentYear === DEFAULT_YEAR ? INITIAL_PRIORITAS_DESA_PUSKESMAS : [];
   });
+
+  // Firestore Real-time Listener (Semua laptop sinkron ke Cloud)
+  useEffect(() => {
+    const docRef = doc(db, 'ppbr_data', docId);
+    const unsub = onSnapshot(docRef, (snap) => {
+      if (snap.exists()) {
+        const snapData = snap.data();
+        if (snapData && Array.isArray(snapData.items)) {
+          try {
+            const localRaw = localStorage.getItem(storageKey) || localStorage.getItem(oldStorageKey);
+            if (localRaw) {
+              const localParsed = JSON.parse(localRaw);
+              if (Array.isArray(localParsed) && localParsed.length > snapData.items.length) {
+                console.log(`[Auto-Sync Desa] Mempromosikan data lokal (${localParsed.length} entitas vs cloud ${snapData.items.length}) ke Cloud.`);
+                setDoc(docRef, {
+                  items: localParsed,
+                  updatedAt: new Date().toISOString(),
+                  title: `Prioritas Desa & Puskesmas ${currentYear}`
+                }, { merge: true }).catch(() => {});
+                return;
+              }
+            }
+          } catch (_) {}
+
+          isRemoteUpdateRef.current = true;
+          const sorted = [...snapData.items].sort((a, b) => b.skorTotal - a.skorTotal);
+          const withRank = sorted.map((item, idx) => ({ ...item, ranking: idx + 1, no: idx + 1 }));
+          setData(withRank);
+          localStorage.setItem(storageKey, JSON.stringify(withRank));
+          setCloudStatus('synced');
+          if (snapData.updatedAt) {
+            try {
+              setLastSyncedTime(new Date(snapData.updatedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+            } catch (_) {
+              setLastSyncedTime(new Date().toLocaleTimeString('id-ID'));
+            }
+          }
+          setTimeout(() => { isRemoteUpdateRef.current = false; }, 300);
+        }
+      } else {
+        if (data.length > 0) {
+          setDoc(docRef, {
+            items: data,
+            updatedAt: new Date().toISOString(),
+            title: `Prioritas Desa & Puskesmas ${currentYear}`
+          }, { merge: true }).catch(() => {});
+        }
+      }
+    }, (err) => {
+      console.warn('Firestore Prioritas Desa listener warning:', err);
+      setCloudStatus('offline');
+    });
+
+    return () => {
+      unsub();
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    };
+  }, [docId, currentYear, storageKey, oldStorageKey]);
 
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
@@ -79,11 +154,70 @@ export const PrioritasDesaPuskesmasView: React.FC<PrioritasDesaPuskesmasViewProp
     return parseFloat(total.toFixed(2));
   };
 
-  const handleSaveData = (newData: PrioritasDesaPuskesmasItem[]) => {
+  const handleSaveData = (newData: PrioritasDesaPuskesmasItem[], forceInstantCloud: boolean = false) => {
     const sorted = [...newData].sort((a, b) => b.skorTotal - a.skorTotal);
     const withRank = sorted.map((item, idx) => ({ ...item, ranking: idx + 1, no: idx + 1 }));
     setData(withRank);
     localStorage.setItem(storageKey, JSON.stringify(withRank));
+
+    if (isRemoteUpdateRef.current) return;
+
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    const saveToFirestore = async () => {
+      try {
+        setCloudStatus('saving');
+        const docRef = doc(db, 'ppbr_data', docId);
+        await setDoc(docRef, {
+          items: withRank,
+          updatedAt: new Date().toISOString(),
+          title: `Prioritas Desa & Puskesmas ${currentYear}`
+        }, { merge: true });
+        setCloudStatus('synced');
+        setLastSyncedTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+      } catch (e) {
+        console.warn('Failed saving Menu 10 to Firestore:', e);
+        setCloudStatus('offline');
+      }
+    };
+
+    if (forceInstantCloud) {
+      saveToFirestore();
+    } else {
+      setCloudStatus('saving');
+      saveTimeoutRef.current = setTimeout(saveToFirestore, 800);
+    }
+  };
+
+  const handleManualCloudSync = async () => {
+    setIsManualSyncing(true);
+    try {
+      const docRef = doc(db, 'ppbr_data', docId);
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        const snapData = snap.data();
+        if (snapData && Array.isArray(snapData.items)) {
+          const sorted = [...snapData.items].sort((a, b) => b.skorTotal - a.skorTotal);
+          const withRank = sorted.map((item, idx) => ({ ...item, ranking: idx + 1, no: idx + 1 }));
+          setData(withRank);
+          localStorage.setItem(storageKey, JSON.stringify(withRank));
+          setCloudStatus('synced');
+          setLastSyncedTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+        }
+      } else {
+        await setDoc(docRef, {
+          items: data,
+          updatedAt: new Date().toISOString(),
+          title: `Prioritas Desa & Puskesmas ${currentYear}`
+        }, { merge: true });
+        setCloudStatus('synced');
+        setLastSyncedTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+      }
+    } catch (e) {
+      console.warn('Manual sync Menu 10 failed:', e);
+      setCloudStatus('offline');
+    } finally {
+      setIsManualSyncing(false);
+    }
   };
 
   const handleAddItem = (e: React.FormEvent) => {
@@ -268,6 +402,45 @@ export const PrioritasDesaPuskesmasView: React.FC<PrioritasDesaPuskesmasViewProp
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {/* Live Cloud Sync Status Badge */}
+            <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
+              cloudStatus === 'synced'
+                ? 'bg-emerald-950/70 border-emerald-500/40 text-emerald-300'
+                : cloudStatus === 'saving'
+                ? 'bg-amber-950/70 border-amber-500/40 text-amber-300 animate-pulse'
+                : 'bg-rose-950/70 border-rose-500/40 text-rose-300'
+            }`}>
+              {cloudStatus === 'synced' ? (
+                <>
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <Cloud className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Cloud Terhubung {lastSyncedTime ? `(${lastSyncedTime})` : ''}</span>
+                </>
+              ) : cloudStatus === 'saving' ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 text-amber-400 animate-spin" />
+                  <span>Menyimpan ke Cloud...</span>
+                </>
+              ) : (
+                <>
+                  <AlertCircle className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Tersimpan Lokal</span>
+                </>
+              )}
+            </div>
+
+            {isAdmin && (
+              <button
+                onClick={handleManualCloudSync}
+                disabled={isManualSyncing}
+                className="px-3 py-1.5 bg-teal-900/60 hover:bg-teal-800/80 text-teal-200 border border-teal-700/50 rounded-xl text-xs font-medium flex items-center gap-1.5 transition active:scale-95 disabled:opacity-50"
+                title="Tarik & sinkronkan data terbaru dari Cloud Firestore"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isManualSyncing ? 'animate-spin text-cyan-400' : 'text-teal-300'}`} />
+                <span>{isManualSyncing ? 'Menyinkronkan...' : 'Sinkron Cloud'}</span>
+              </button>
+            )}
+
             <button
               onClick={() => setShowGuide(!showGuide)}
               className="px-3.5 py-2 bg-teal-800/60 hover:bg-teal-700/80 text-teal-100 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition border border-teal-700/50"
