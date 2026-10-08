@@ -1,10 +1,10 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { EvaluasiRegisterRisikoItem, INITIAL_EVALUASI_REGISTER, AuditUniverseItem, INITIAL_AUDIT_UNIVERSE } from './ppbrData';
 import { exportToExcel, exportToPdf } from './ppbrExport';
 import { ConfirmModal } from '../common/ConfirmModal';
 import { db } from '../../lib/firebase';
-import { collection, getDocs, query, where } from 'firebase/firestore';
-import { getScopedKey, getSelectedYear, DEFAULT_YEAR, AVAILABLE_YEARS } from './ppbrYearHelper';
+import { collection, getDocs, query, where, doc, onSnapshot, setDoc, getDoc } from 'firebase/firestore';
+import { getScopedKey, getScopedPPBRDocId, getSelectedYear, DEFAULT_YEAR, AVAILABLE_YEARS } from './ppbrYearHelper';
 import {
   ShieldCheck,
   Plus,
@@ -25,7 +25,9 @@ import {
   Check,
   X,
   SlidersHorizontal,
-  ChevronDown
+  ChevronDown,
+  Cloud,
+  AlertCircle
 } from 'lucide-react';
 
 interface SyncPreviewItem {
@@ -61,6 +63,7 @@ export interface EvaluasiRegisterRisikoViewProps {
 export const EvaluasiRegisterRisikoView: React.FC<EvaluasiRegisterRisikoViewProps> = ({ isAdmin: isAdminProp, year }) => {
   const currentYear = year || getSelectedYear();
   const storageKey = getScopedKey('ppbr_evaluasi_register', currentYear);
+  const docId = getScopedPPBRDocId('evaluasi_register', currentYear);
 
   const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
     try {
@@ -74,6 +77,13 @@ export const EvaluasiRegisterRisikoView: React.FC<EvaluasiRegisterRisikoViewProp
     return true;
   })();
 
+  // Cloud Real-time Synchronization States
+  const [cloudStatus, setCloudStatus] = useState<'synced' | 'saving' | 'offline' | 'error'>('synced');
+  const [lastSyncedTime, setLastSyncedTime] = useState<string | null>(null);
+  const [isManualSyncing, setIsManualSyncing] = useState<boolean>(false);
+  const isRemoteUpdateRef = useRef<boolean>(false);
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
   const [data, setData] = useState<EvaluasiRegisterRisikoItem[]>(() => {
     const saved = localStorage.getItem(storageKey);
     if (saved) {
@@ -86,6 +96,46 @@ export const EvaluasiRegisterRisikoView: React.FC<EvaluasiRegisterRisikoViewProp
     }
     return currentYear === DEFAULT_YEAR ? INITIAL_EVALUASI_REGISTER : [];
   });
+
+  // Firestore Real-time Listener (Semua laptop terhubung ke Cloud yang sama)
+  useEffect(() => {
+    const docRef = doc(db, 'ppbr_data', docId);
+    const unsub = onSnapshot(docRef, (snap) => {
+      if (snap.exists()) {
+        const snapData = snap.data();
+        if (snapData && Array.isArray(snapData.items)) {
+          isRemoteUpdateRef.current = true;
+          setData(snapData.items);
+          localStorage.setItem(storageKey, JSON.stringify(snapData.items));
+          setCloudStatus('synced');
+          if (snapData.updatedAt) {
+            try {
+              setLastSyncedTime(new Date(snapData.updatedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+            } catch (_) {
+              setLastSyncedTime(new Date().toLocaleTimeString('id-ID'));
+            }
+          }
+          setTimeout(() => { isRemoteUpdateRef.current = false; }, 300);
+        }
+      } else {
+        if (data.length > 0) {
+          setDoc(docRef, {
+            items: data,
+            updatedAt: new Date().toISOString(),
+            title: `Evaluasi Register Risiko ${currentYear}`
+          }, { merge: true }).catch(() => {});
+        }
+      }
+    }, (err) => {
+      console.warn('Firestore Evaluasi Register listener warning:', err);
+      setCloudStatus('offline');
+    });
+
+    return () => {
+      unsub();
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    };
+  }, [docId, currentYear, storageKey]);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [filterLevel, setFilterLevel] = useState<string>('ALL');
@@ -114,9 +164,48 @@ export const EvaluasiRegisterRisikoView: React.FC<EvaluasiRegisterRisikoViewProp
     onConfirm: () => {}
   });
 
-  const handleSaveData = (newData: EvaluasiRegisterRisikoItem[]) => {
+  const handleSaveData = (newData: EvaluasiRegisterRisikoItem[], immediateCloud = false) => {
     setData(newData);
     localStorage.setItem(storageKey, JSON.stringify(newData));
+
+    if (isRemoteUpdateRef.current) return;
+    setCloudStatus('saving');
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+
+    const doSave = async () => {
+      try {
+        const nowIso = new Date().toISOString();
+        await setDoc(doc(db, 'ppbr_data', docId), {
+          items: newData,
+          updatedAt: nowIso,
+          title: `Evaluasi Register Risiko ${currentYear}`
+        }, { merge: true });
+        setCloudStatus('synced');
+        setLastSyncedTime(new Date(nowIso).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+      } catch (e) {
+        console.warn('Cloud save Evaluasi Register error:', e);
+        setCloudStatus('offline');
+      }
+    };
+
+    if (immediateCloud) doSave();
+    else saveTimeoutRef.current = setTimeout(doSave, 800);
+  };
+
+  const handleManualCloudSync = async () => {
+    setIsManualSyncing(true);
+    try {
+      const snap = await getDoc(doc(db, 'ppbr_data', docId));
+      if (snap.exists() && Array.isArray(snap.data()?.items)) {
+        setData(snap.data().items);
+        localStorage.setItem(storageKey, JSON.stringify(snap.data().items));
+        setCloudStatus('synced');
+      }
+    } catch (_) {
+      setCloudStatus('offline');
+    } finally {
+      setIsManualSyncing(false);
+    }
   };
 
   // Direct cell update
