@@ -1,8 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { db } from '../../lib/firebase';
+import { doc, onSnapshot, setDoc, getDoc } from 'firebase/firestore';
 import { UsulanPrioritasPengawasanItem, PrioritasProgramRPJMDItem } from './ppbrData';
 import { exportToExcel, exportToPdf } from './ppbrExport';
 import { ConfirmModal } from '../common/ConfirmModal';
-import { getScopedKey, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
+import { getScopedKey, getScopedPPBRDocId, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
 import {
   Target,
   Edit3,
@@ -19,7 +21,8 @@ import {
   CheckCircle2,
   SlidersHorizontal,
   ArrowUpDown,
-  RotateCcw
+  RotateCcw,
+  Cloud
 } from 'lucide-react';
 
 export const PILIHAN_JENIS_PENGAWASAN = [
@@ -41,6 +44,7 @@ export const UsulanPrioritasPengawasanView: React.FC<UsulanPrioritasPengawasanVi
   const currentYear = year || getSelectedYear();
   const storageKey = getScopedKey('ppbr_usulan_pengawasan', currentYear);
   const m8StorageKey = getScopedKey('ppbr_prioritas_program', currentYear);
+  const docId = getScopedPPBRDocId('usulan_pengawasan', currentYear);
 
   const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
     try {
@@ -53,6 +57,13 @@ export const UsulanPrioritasPengawasanView: React.FC<UsulanPrioritasPengawasanVi
     } catch (_) {}
     return true;
   })();
+
+  // Cloud Real-time Synchronization States
+  const [cloudStatus, setCloudStatus] = useState<'synced' | 'saving' | 'offline' | 'error'>('synced');
+  const [lastSyncedTime, setLastSyncedTime] = useState<string | null>(null);
+  const [isManualSyncing, setIsManualSyncing] = useState<boolean>(false);
+  const isRemoteUpdateRef = useRef<boolean>(false);
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Baca data dari Menu 8 (Prioritas Program RPJMD)
   const getMenu8Data = (): PrioritasProgramRPJMDItem[] => {
@@ -69,9 +80,139 @@ export const UsulanPrioritasPengawasanView: React.FC<UsulanPrioritasPengawasanVi
   };
 
   // Baca data usulan yang sudah disimpan
-  const [data, setData] = useState<UsulanPrioritasPengawasanItem[]>([]);
+  const [data, setData] = useState<UsulanPrioritasPengawasanItem[]>(() => {
+    const saved = localStorage.getItem(storageKey);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      } catch (_) {}
+    }
+    return [];
+  });
   const [menu8Items, setMenu8Items] = useState<PrioritasProgramRPJMDItem[]>([]);
   const [isMenu8Filled, setIsMenu8Filled] = useState<boolean>(false);
+
+  // Firestore Real-time Listener (Semua laptop sinkron ke Cloud)
+  useEffect(() => {
+    const docRef = doc(db, 'ppbr_data', docId);
+    const unsub = onSnapshot(docRef, (snap) => {
+      if (snap.exists()) {
+        const snapData = snap.data();
+        if (snapData && Array.isArray(snapData.items)) {
+          try {
+            const localRaw = localStorage.getItem(storageKey);
+            if (localRaw) {
+              const localParsed = JSON.parse(localRaw);
+              if (Array.isArray(localParsed) && localParsed.length > snapData.items.length) {
+                console.log(`[Auto-Sync Usulan] Mempromosikan data lokal (${localParsed.length} usulan vs cloud ${snapData.items.length}) ke Cloud.`);
+                setDoc(docRef, {
+                  items: localParsed,
+                  updatedAt: new Date().toISOString(),
+                  title: `Usulan Prioritas Pengawasan ${currentYear}`
+                }, { merge: true }).catch(() => {});
+                return;
+              }
+            }
+          } catch (_) {}
+
+          isRemoteUpdateRef.current = true;
+          setData(snapData.items);
+          setIsMenu8Filled(snapData.items.length > 0);
+          localStorage.setItem(storageKey, JSON.stringify(snapData.items));
+          setCloudStatus('synced');
+          if (snapData.updatedAt) {
+            try {
+              setLastSyncedTime(new Date(snapData.updatedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+            } catch (_) {
+              setLastSyncedTime(new Date().toLocaleTimeString('id-ID'));
+            }
+          }
+          setTimeout(() => { isRemoteUpdateRef.current = false; }, 300);
+        }
+      } else {
+        if (data.length > 0) {
+          setDoc(docRef, {
+            items: data,
+            updatedAt: new Date().toISOString(),
+            title: `Usulan Prioritas Pengawasan ${currentYear}`
+          }, { merge: true }).catch(() => {});
+        }
+      }
+    }, (err) => {
+      console.warn('Firestore Usulan Pengawasan listener warning:', err);
+      setCloudStatus('offline');
+    });
+
+    return () => {
+      unsub();
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    };
+  }, [docId, currentYear, storageKey]);
+
+  const handleSaveData = (newData: UsulanPrioritasPengawasanItem[], forceInstantCloud: boolean = false) => {
+    setData(newData);
+    localStorage.setItem(storageKey, JSON.stringify(newData));
+    window.dispatchEvent(new Event('ppbr_data_updated'));
+
+    if (isRemoteUpdateRef.current) return;
+
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    const saveToFirestore = async () => {
+      try {
+        setCloudStatus('saving');
+        const docRef = doc(db, 'ppbr_data', docId);
+        await setDoc(docRef, {
+          items: newData,
+          updatedAt: new Date().toISOString(),
+          title: `Usulan Prioritas Pengawasan ${currentYear}`
+        }, { merge: true });
+        setCloudStatus('synced');
+        setLastSyncedTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+      } catch (e) {
+        console.warn('Failed saving Menu 11 to Firestore:', e);
+        setCloudStatus('offline');
+      }
+    };
+
+    if (forceInstantCloud) {
+      saveToFirestore();
+    } else {
+      setCloudStatus('saving');
+      saveTimeoutRef.current = setTimeout(saveToFirestore, 800);
+    }
+  };
+
+  const handleManualCloudSync = async () => {
+    setIsManualSyncing(true);
+    try {
+      const docRef = doc(db, 'ppbr_data', docId);
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        const snapData = snap.data();
+        if (snapData && Array.isArray(snapData.items)) {
+          setData(snapData.items);
+          setIsMenu8Filled(snapData.items.length > 0);
+          localStorage.setItem(storageKey, JSON.stringify(snapData.items));
+          setCloudStatus('synced');
+          setLastSyncedTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+        }
+      } else {
+        await setDoc(docRef, {
+          items: data,
+          updatedAt: new Date().toISOString(),
+          title: `Usulan Prioritas Pengawasan ${currentYear}`
+        }, { merge: true });
+        setCloudStatus('synced');
+        setLastSyncedTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+      }
+    } catch (e) {
+      console.warn('Manual sync Menu 11 failed:', e);
+      setCloudStatus('offline');
+    } finally {
+      setIsManualSyncing(false);
+    }
+  };
 
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
@@ -198,21 +339,20 @@ export const UsulanPrioritasPengawasanView: React.FC<UsulanPrioritasPengawasanVi
     });
 
     setData(generatedUsulan);
-    localStorage.setItem(storageKey, JSON.stringify(generatedUsulan));
-    window.dispatchEvent(new Event('ppbr_data_updated'));
+    handleSaveData(generatedUsulan);
   };
 
-  // Muat data saat komponen aktif
+  // Muat data saat komponen aktif jika belum ada
   useEffect(() => {
-    syncFromMenu8();
+    if (data.length === 0) {
+      syncFromMenu8();
+    }
   }, [currentYear]);
 
   // Update inline jenis pengawasan
   const handleUpdateJenisPengawasan = (item: UsulanPrioritasPengawasanItem, newJenis: string) => {
     const updated = data.map(d => (d.id === item.id ? { ...d, jenisPengawasan: newJenis } : d));
-    setData(updated);
-    localStorage.setItem(storageKey, JSON.stringify(updated));
-    window.dispatchEvent(new Event('ppbr_data_updated'));
+    handleSaveData(updated);
   };
 
   // Simpan hasil form edit
@@ -230,9 +370,7 @@ export const UsulanPrioritasPengawasanView: React.FC<UsulanPrioritasPengawasanVi
         : d
     );
 
-    setData(updated);
-    localStorage.setItem(storageKey, JSON.stringify(updated));
-    window.dispatchEvent(new Event('ppbr_data_updated'));
+    handleSaveData(updated);
     setShowEditModal(false);
     setEditingItem(null);
   };
@@ -313,6 +451,45 @@ export const UsulanPrioritasPengawasanView: React.FC<UsulanPrioritasPengawasanVi
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {/* Live Cloud Sync Status Badge */}
+            <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
+              cloudStatus === 'synced'
+                ? 'bg-emerald-950/70 border-emerald-500/40 text-emerald-300'
+                : cloudStatus === 'saving'
+                ? 'bg-amber-950/70 border-amber-500/40 text-amber-300 animate-pulse'
+                : 'bg-rose-950/70 border-rose-500/40 text-rose-300'
+            }`}>
+              {cloudStatus === 'synced' ? (
+                <>
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <Cloud className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Cloud Terhubung {lastSyncedTime ? `(${lastSyncedTime})` : ''}</span>
+                </>
+              ) : cloudStatus === 'saving' ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 text-amber-400 animate-spin" />
+                  <span>Menyimpan ke Cloud...</span>
+                </>
+              ) : (
+                <>
+                  <AlertCircle className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Tersimpan Lokal</span>
+                </>
+              )}
+            </div>
+
+            {isAdmin && (
+              <button
+                onClick={handleManualCloudSync}
+                disabled={isManualSyncing}
+                className="px-3 py-1.5 bg-blue-900/60 hover:bg-blue-800/80 text-blue-200 border border-blue-700/50 rounded-xl text-xs font-medium flex items-center gap-1.5 transition active:scale-95 disabled:opacity-50"
+                title="Tarik & sinkronkan data terbaru dari Cloud Firestore"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isManualSyncing ? 'animate-spin text-cyan-400' : 'text-blue-300'}`} />
+                <span>{isManualSyncing ? 'Menyinkronkan...' : 'Sinkron Cloud'}</span>
+              </button>
+            )}
+
             {isAdmin && (
               <button
                 onClick={syncFromMenu8}
