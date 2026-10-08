@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   FaktorRisikoAnggaranItem,
   AuditUniverseItem,
@@ -7,7 +7,9 @@ import {
 } from './ppbrData';
 import { exportToExcel, exportToPdf } from './ppbrExport';
 import { ConfirmModal } from '../common/ConfirmModal';
-import { getScopedKey, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
+import { getScopedKey, getScopedPPBRDocId, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
+import { db } from '../../lib/firebase';
+import { doc, onSnapshot, setDoc, getDoc } from 'firebase/firestore';
 import {
   Coins,
   Plus,
@@ -25,7 +27,8 @@ import {
   Building2,
   Layers,
   ArrowRight,
-  Sparkles
+  Sparkles,
+  Cloud
 } from 'lucide-react';
 
 const calculateSkalaStatic = (pct: number): number => {
@@ -107,6 +110,7 @@ export const FaktorRisikoAnggaranView: React.FC<FaktorRisikoAnggaranViewProps> =
   const currentYear = year || getSelectedYear();
   const storageKey = getScopedKey('ppbr_faktor_anggaran', currentYear);
   const apbdKey = getScopedKey('ppbr_total_apbd', currentYear);
+  const docId = getScopedPPBRDocId('faktor_anggaran', currentYear);
 
   const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
     try {
@@ -124,6 +128,13 @@ export const FaktorRisikoAnggaranView: React.FC<FaktorRisikoAnggaranViewProps> =
     const saved = localStorage.getItem(apbdKey);
     return saved ? Number(saved) : 480500000000; // Rp 480.5 Milyar default
   });
+
+  // Cloud Real-time Synchronization States
+  const [cloudStatus, setCloudStatus] = useState<'synced' | 'saving' | 'offline' | 'error'>('synced');
+  const [lastSyncedTime, setLastSyncedTime] = useState<string | null>(null);
+  const [isManualSyncing, setIsManualSyncing] = useState<boolean>(false);
+  const isRemoteUpdateRef = useRef<boolean>(false);
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Inisialisasi data: Jika belum ada di localStorage, otomatis ambil dari Program RPJMD & OPD di Menu 1
   const [data, setData] = useState<FaktorRisikoAnggaranItem[]>(() => {
@@ -161,6 +172,51 @@ export const FaktorRisikoAnggaranView: React.FC<FaktorRisikoAnggaranViewProps> =
 
     return INITIAL_FAKTOR_ANGGARAN;
   });
+
+  // Firestore Real-time Listener (Semua laptop terhubung ke database yang sama)
+  useEffect(() => {
+    const docRef = doc(db, 'ppbr_data', docId);
+    const unsub = onSnapshot(docRef, (snap) => {
+      if (snap.exists()) {
+        const snapData = snap.data();
+        if (snapData && Array.isArray(snapData.items)) {
+          isRemoteUpdateRef.current = true;
+          setData(snapData.items);
+          localStorage.setItem(storageKey, JSON.stringify(snapData.items));
+          if (snapData.totalAPBD) {
+            setTotalAPBD(snapData.totalAPBD);
+            localStorage.setItem(apbdKey, String(snapData.totalAPBD));
+          }
+          setCloudStatus('synced');
+          if (snapData.updatedAt) {
+            try {
+              setLastSyncedTime(new Date(snapData.updatedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+            } catch (_) {
+              setLastSyncedTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+            }
+          }
+          setTimeout(() => { isRemoteUpdateRef.current = false; }, 300);
+        }
+      } else {
+        if (data.length > 0) {
+          setDoc(docRef, {
+            items: data,
+            totalAPBD,
+            updatedAt: new Date().toISOString(),
+            title: `Faktor Risiko Anggaran ${currentYear}`
+          }, { merge: true }).catch(() => {});
+        }
+      }
+    }, (err) => {
+      console.warn('Firestore Faktor Anggaran listener warning:', err);
+      setCloudStatus('offline');
+    });
+
+    return () => {
+      unsub();
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    };
+  }, [docId, currentYear, storageKey, apbdKey]);
 
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
@@ -202,9 +258,53 @@ export const FaktorRisikoAnggaranView: React.FC<FaktorRisikoAnggaranViewProps> =
     return calculateSkalaStatic(pct);
   };
 
-  const handleSaveData = (newData: FaktorRisikoAnggaranItem[]) => {
+  const handleSaveData = (newData: FaktorRisikoAnggaranItem[], immediateCloud = false) => {
     setData(newData);
     localStorage.setItem(storageKey, JSON.stringify(newData));
+
+    if (isRemoteUpdateRef.current) return;
+    setCloudStatus('saving');
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+
+    const doSave = async () => {
+      try {
+        const nowIso = new Date().toISOString();
+        await setDoc(doc(db, 'ppbr_data', docId), {
+          items: newData,
+          totalAPBD,
+          updatedAt: nowIso,
+          title: `Faktor Risiko Anggaran ${currentYear}`
+        }, { merge: true });
+        setCloudStatus('synced');
+        setLastSyncedTime(new Date(nowIso).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+      } catch (e) {
+        console.warn('Cloud save Faktor Anggaran error:', e);
+        setCloudStatus('offline');
+      }
+    };
+
+    if (immediateCloud) doSave();
+    else saveTimeoutRef.current = setTimeout(doSave, 800);
+  };
+
+  const handleManualCloudSync = async () => {
+    setIsManualSyncing(true);
+    try {
+      const snap = await getDoc(doc(db, 'ppbr_data', docId));
+      if (snap.exists() && Array.isArray(snap.data()?.items)) {
+        setData(snap.data().items);
+        localStorage.setItem(storageKey, JSON.stringify(snap.data().items));
+        if (snap.data().totalAPBD) {
+          setTotalAPBD(snap.data().totalAPBD);
+          localStorage.setItem(apbdKey, String(snap.data().totalAPBD));
+        }
+        setCloudStatus('synced');
+      }
+    } catch (_) {
+      setCloudStatus('offline');
+    } finally {
+      setIsManualSyncing(false);
+    }
   };
 
   // Daftar program dari Menu 1 terkini
@@ -578,6 +678,45 @@ export const FaktorRisikoAnggaranView: React.FC<FaktorRisikoAnggaranViewProps> =
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {/* Live Cloud Sync Status Badge */}
+            <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
+              cloudStatus === 'synced'
+                ? 'bg-emerald-950/70 border-emerald-500/40 text-emerald-300'
+                : cloudStatus === 'saving'
+                ? 'bg-amber-950/70 border-amber-500/40 text-amber-300 animate-pulse'
+                : 'bg-rose-950/70 border-rose-500/40 text-rose-300'
+            }`}>
+              {cloudStatus === 'synced' ? (
+                <>
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <Cloud className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Cloud Terhubung {lastSyncedTime ? `(${lastSyncedTime})` : ''}</span>
+                </>
+              ) : cloudStatus === 'saving' ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 text-amber-400 animate-spin" />
+                  <span>Menyimpan ke Cloud...</span>
+                </>
+              ) : (
+                <>
+                  <AlertCircle className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Tersimpan Lokal</span>
+                </>
+              )}
+            </div>
+
+            {isAdmin && (
+              <button
+                onClick={handleManualCloudSync}
+                disabled={isManualSyncing}
+                className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition disabled:opacity-50"
+                title="Tarik perubahan terbaru dari Cloud Firestore"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 text-amber-400 ${isManualSyncing ? 'animate-spin' : ''}`} />
+                <span>{isManualSyncing ? 'Sinkronisasi...' : 'Tarik Cloud'}</span>
+              </button>
+            )}
+
             <button
               onClick={() => setShowGuide(!showGuide)}
               className="px-3.5 py-2 bg-amber-800/60 hover:bg-amber-700/80 text-amber-100 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition border border-amber-700/50"
