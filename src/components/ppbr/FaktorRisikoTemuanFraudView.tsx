@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { 
   FaktorRisikoTemuanFraudItem, 
   INITIAL_TEMUAN_FRAUD,
@@ -7,7 +7,9 @@ import {
 } from './ppbrData';
 import { exportToExcel, exportToPdf } from './ppbrExport';
 import { ConfirmModal } from '../common/ConfirmModal';
-import { getScopedKey, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
+import { getScopedKey, getScopedPPBRDocId, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
+import { db } from '../../lib/firebase';
+import { doc, onSnapshot, setDoc, getDoc } from 'firebase/firestore';
 import { 
   AlertTriangle, 
   Plus, 
@@ -26,7 +28,8 @@ import {
   Layers,
   AlertCircle,
   Sparkles,
-  Check
+  Check,
+  Cloud
 } from 'lucide-react';
 
 // Helper: Mengambil data Audit Universe dari Menu 1
@@ -110,6 +113,7 @@ export interface FaktorRisikoTemuanFraudViewProps {
 export const FaktorRisikoTemuanFraudView: React.FC<FaktorRisikoTemuanFraudViewProps> = ({ isAdmin: isAdminProp, year }) => {
   const currentYear = year || getSelectedYear();
   const storageKey = getScopedKey('ppbr_faktor_temuan_fraud', currentYear);
+  const docId = getScopedPPBRDocId('temuan_fraud', currentYear);
 
   const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
     try {
@@ -122,6 +126,13 @@ export const FaktorRisikoTemuanFraudView: React.FC<FaktorRisikoTemuanFraudViewPr
     } catch (_) {}
     return true;
   })();
+
+  // Cloud Real-time Synchronization States
+  const [cloudStatus, setCloudStatus] = useState<'synced' | 'saving' | 'offline' | 'error'>('synced');
+  const [lastSyncedTime, setLastSyncedTime] = useState<string | null>(null);
+  const [isManualSyncing, setIsManualSyncing] = useState<boolean>(false);
+  const isRemoteUpdateRef = useRef<boolean>(false);
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Inisialisasi data: Jika belum ada di localStorage, otomatis ambil dari Program RPJMD & OPD di Menu 1
   const [data, setData] = useState<FaktorRisikoTemuanFraudItem[]>(() => {
@@ -158,6 +169,46 @@ export const FaktorRisikoTemuanFraudView: React.FC<FaktorRisikoTemuanFraudViewPr
 
     return INITIAL_TEMUAN_FRAUD;
   });
+
+  // Firestore Real-time Listener (Semua laptop terhubung ke Cloud yang sama)
+  useEffect(() => {
+    const docRef = doc(db, 'ppbr_data', docId);
+    const unsub = onSnapshot(docRef, (snap) => {
+      if (snap.exists()) {
+        const snapData = snap.data();
+        if (snapData && Array.isArray(snapData.items)) {
+          isRemoteUpdateRef.current = true;
+          setData(snapData.items);
+          localStorage.setItem(storageKey, JSON.stringify(snapData.items));
+          setCloudStatus('synced');
+          if (snapData.updatedAt) {
+            try {
+              setLastSyncedTime(new Date(snapData.updatedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+            } catch (_) {
+              setLastSyncedTime(new Date().toLocaleTimeString('id-ID'));
+            }
+          }
+          setTimeout(() => { isRemoteUpdateRef.current = false; }, 300);
+        }
+      } else {
+        if (data.length > 0) {
+          setDoc(docRef, {
+            items: data,
+            updatedAt: new Date().toISOString(),
+            title: `Temuan & Fraud ${currentYear}`
+          }, { merge: true }).catch(() => {});
+        }
+      }
+    }, (err) => {
+      console.warn('Firestore Temuan & Fraud listener warning:', err);
+      setCloudStatus('offline');
+    });
+
+    return () => {
+      unsub();
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    };
+  }, [docId, currentYear, storageKey]);
 
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
@@ -209,9 +260,48 @@ export const FaktorRisikoTemuanFraudView: React.FC<FaktorRisikoTemuanFraudViewPr
     return calculateSkalaStatic(val);
   };
 
-  const handleSaveData = (newData: FaktorRisikoTemuanFraudItem[]) => {
+  const handleSaveData = (newData: FaktorRisikoTemuanFraudItem[], immediateCloud = false) => {
     setData(newData);
     localStorage.setItem(storageKey, JSON.stringify(newData));
+
+    if (isRemoteUpdateRef.current) return;
+    setCloudStatus('saving');
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+
+    const doSave = async () => {
+      try {
+        const nowIso = new Date().toISOString();
+        await setDoc(doc(db, 'ppbr_data', docId), {
+          items: newData,
+          updatedAt: nowIso,
+          title: `Temuan & Fraud ${currentYear}`
+        }, { merge: true });
+        setCloudStatus('synced');
+        setLastSyncedTime(new Date(nowIso).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+      } catch (e) {
+        console.warn('Cloud save Temuan Fraud error:', e);
+        setCloudStatus('offline');
+      }
+    };
+
+    if (immediateCloud) doSave();
+    else saveTimeoutRef.current = setTimeout(doSave, 800);
+  };
+
+  const handleManualCloudSync = async () => {
+    setIsManualSyncing(true);
+    try {
+      const snap = await getDoc(doc(db, 'ppbr_data', docId));
+      if (snap.exists() && Array.isArray(snap.data()?.items)) {
+        setData(snap.data().items);
+        localStorage.setItem(storageKey, JSON.stringify(snap.data().items));
+        setCloudStatus('synced');
+      }
+    } catch (_) {
+      setCloudStatus('offline');
+    } finally {
+      setIsManualSyncing(false);
+    }
   };
 
   // Daftar program dari Menu 1 terkini
@@ -657,6 +747,45 @@ export const FaktorRisikoTemuanFraudView: React.FC<FaktorRisikoTemuanFraudViewPr
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {/* Live Cloud Sync Status Badge */}
+            <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
+              cloudStatus === 'synced'
+                ? 'bg-rose-950/70 border-rose-500/40 text-rose-300'
+                : cloudStatus === 'saving'
+                ? 'bg-amber-950/70 border-amber-500/40 text-amber-300 animate-pulse'
+                : 'bg-slate-900/70 border-slate-700 text-slate-300'
+            }`}>
+              {cloudStatus === 'synced' ? (
+                <>
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <Cloud className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Cloud Terhubung {lastSyncedTime ? `(${lastSyncedTime})` : ''}</span>
+                </>
+              ) : cloudStatus === 'saving' ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 text-amber-400 animate-spin" />
+                  <span>Menyimpan ke Cloud...</span>
+                </>
+              ) : (
+                <>
+                  <AlertCircle className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Tersimpan Lokal</span>
+                </>
+              )}
+            </div>
+
+            {isAdmin && (
+              <button
+                onClick={handleManualCloudSync}
+                disabled={isManualSyncing}
+                className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition disabled:opacity-50"
+                title="Tarik perubahan terbaru dari Cloud Firestore"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 text-rose-400 ${isManualSyncing ? 'animate-spin' : ''}`} />
+                <span>{isManualSyncing ? 'Sinkronisasi...' : 'Tarik Cloud'}</span>
+              </button>
+            )}
+
             <button
               onClick={() => setShowGuide(!showGuide)}
               className="px-3.5 py-2 bg-rose-800/60 hover:bg-rose-700/80 text-rose-100 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition border border-rose-700/50"
