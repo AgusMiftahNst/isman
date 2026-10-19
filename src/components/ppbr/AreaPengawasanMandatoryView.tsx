@@ -1344,7 +1344,7 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
                         <optgroup label="Standar Bentuk Pengawasan">
                           {DEFAULT_BENTUK_PENGAWASAN_MANDATORY.map(opt => (
                             <option key={opt} value={opt}>
-                              {opt === 'Monitoring' ? '⭐ Monitoring' : opt}
+                              {opt}
                             </option>
                           ))}
                         </optgroup>
@@ -1352,7 +1352,7 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
                           <optgroup label="Pilihan Tambahan / Kustom">
                             {customBentukList.map(opt => (
                               <option key={opt} value={opt}>
-                                📌 {opt}
+                                {opt}
                               </option>
                             ))}
                           </optgroup>
@@ -1598,7 +1598,7 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
                         <optgroup label="Standar Bentuk Pengawasan">
                           {DEFAULT_BENTUK_PENGAWASAN_MANDATORY.map(opt => (
                             <option key={opt} value={opt}>
-                              {opt === 'Monitoring' ? '⭐ Monitoring' : opt}
+                              {opt}
                             </option>
                           ))}
                         </optgroup>
@@ -1606,7 +1606,7 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
                           <optgroup label="Pilihan Tambahan / Kustom">
                             {customBentukList.map(opt => (
                               <option key={opt} value={opt}>
-                                📌 {opt}
+                                {opt}
                               </option>
                             ))}
                           </optgroup>
