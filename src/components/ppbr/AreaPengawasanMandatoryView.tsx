@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { AreaMandatoryItem } from './ppbrData';
 import { exportToExcel, exportToPdf } from './ppbrExport';
 import { ConfirmModal } from '../common/ConfirmModal';
@@ -28,6 +28,16 @@ import {
   Check,
   Sparkles
 } from 'lucide-react';
+
+export const DEFAULT_BENTUK_PENGAWASAN_MANDATORY = [
+  'Reviu',
+  'Monitoring',
+  'Evaluasi',
+  'Pemantauan',
+  'Audit Kinerja',
+  'Audit Ketaatan',
+  'Asistensi / Bimtek'
+];
 
 const STANDARD_MANDATORY_RECOMMENDATIONS: AreaMandatoryItem[] = [
   {
@@ -208,10 +218,124 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
   }>({
     areaPengawasan: '',
     dasarHukum: '',
-    jenisPengawasan: 'Reviu',
+    jenisPengawasan: 'Monitoring',
     alokasiMandays: 20,
     keterangan: 'Mandat Peraturan Perundang-undangan'
   });
+
+  // Daftar opsi bentuk pengawasan kustom yang ditambahkan sendiri oleh user
+  const [customBentukList, setCustomBentukList] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('ppbr_m12_custom_bentuk_pengawasan');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((x): x is string => typeof x === 'string' && x.trim().length > 0);
+        }
+      }
+    } catch (_) {}
+    return [];
+  });
+
+  // Gabungan opsi default + kustom + opsi yang sudah ada dalam data aktif
+  const availableBentukOptions = useMemo(() => {
+    const set = new Set<string>(DEFAULT_BENTUK_PENGAWASAN_MANDATORY);
+    customBentukList.forEach(opt => {
+      if (opt && opt.trim()) set.add(opt.trim());
+    });
+    data.forEach(item => {
+      if (item.jenisPengawasan && item.jenisPengawasan.trim()) {
+        set.add(item.jenisPengawasan.trim());
+      }
+    });
+    return Array.from(set);
+  }, [customBentukList, data]);
+
+  // Quick input states untuk menambah opsi langsung ke dropdown
+  const [quickNewOptionAdd, setQuickNewOptionAdd] = useState('');
+  const [quickNewOptionEdit, setQuickNewOptionEdit] = useState('');
+  const [optionSuccessMsg, setOptionSuccessMsg] = useState<string | null>(null);
+
+  // Fungsi menyimpan opsi baru ke daftar dropdown & localStorage & Cloud
+  const saveNewBentukOption = (val: string) => {
+    const trimmed = val.trim();
+    if (!trimmed) return;
+    if (!DEFAULT_BENTUK_PENGAWASAN_MANDATORY.includes(trimmed) && !customBentukList.includes(trimmed)) {
+      const updated = [...customBentukList, trimmed];
+      setCustomBentukList(updated);
+      try {
+        localStorage.setItem('ppbr_m12_custom_bentuk_pengawasan', JSON.stringify(updated));
+      } catch (_) {}
+      // Sync ke Firestore agar seluruh tim di laptop lain langsung mendapatkan opsi dropdown ini
+      setDoc(doc(db, 'ppbr_data', docId), {
+        customOptions: updated,
+        updatedAt: new Date().toISOString()
+      }, { merge: true }).catch(err => {
+        console.warn('Sync custom bentuk option to cloud warning:', err);
+      });
+    }
+  };
+
+  // Fungsi menambah opsi baru secara langsung dari quick input form
+  const handleAddNewCustomOptionDirectly = (val: string, targetModal: 'add' | 'edit') => {
+    const trimmed = val.trim();
+    if (!trimmed) return;
+
+    saveNewBentukOption(trimmed);
+
+    if (targetModal === 'add') {
+      setNewItem(prev => ({ ...prev, jenisPengawasan: trimmed }));
+      setIsCustomBentukAdd(false);
+      setCustomBentukAddInput('');
+      setQuickNewOptionAdd('');
+    } else if (targetModal === 'edit') {
+      setEditingItem(prev => prev ? ({ ...prev, jenisPengawasan: trimmed }) : null);
+      setIsCustomBentukEdit(false);
+      setCustomBentukEditInput('');
+      setQuickNewOptionEdit('');
+    }
+
+    setOptionSuccessMsg(`✓ Bentuk pengawasan "${trimmed}" berhasil ditambahkan ke dropdown!`);
+    setTimeout(() => {
+      setOptionSuccessMsg(null);
+    }, 4000);
+  };
+
+  // Fungsi menghapus opsi kustom dari daftar dropdown
+  const handleDeleteCustomOption = (optToDelete: string) => {
+    const updated = customBentukList.filter(o => o !== optToDelete);
+    setCustomBentukList(updated);
+    try {
+      localStorage.setItem('ppbr_m12_custom_bentuk_pengawasan', JSON.stringify(updated));
+    } catch (_) {}
+    setDoc(doc(db, 'ppbr_data', docId), {
+      customOptions: updated,
+      updatedAt: new Date().toISOString()
+    }, { merge: true }).catch(err => {
+      console.warn('Sync custom options deletion to cloud warning:', err);
+    });
+  };
+
+  // State untuk mode "Isi Sendiri" di modal Tambah dan Edit
+  const [isCustomBentukAdd, setIsCustomBentukAdd] = useState(false);
+  const [customBentukAddInput, setCustomBentukAddInput] = useState('');
+  const [isCustomBentukEdit, setIsCustomBentukEdit] = useState(false);
+  const [customBentukEditInput, setCustomBentukEditInput] = useState('');
+
+  const handleOpenAddModal = () => {
+    setIsCustomBentukAdd(false);
+    setCustomBentukAddInput('');
+    setQuickNewOptionAdd('');
+    setOptionSuccessMsg(null);
+    setNewItem({
+      areaPengawasan: '',
+      dasarHukum: '',
+      jenisPengawasan: 'Monitoring',
+      alokasiMandays: 20,
+      keterangan: 'Mandat Peraturan Perundang-undangan'
+    });
+    setShowAddModal(true);
+  };
 
   // Real-time listener: Listen to Firestore Cloud Database updates for Area Mandatory
   useEffect(() => {
@@ -240,11 +364,22 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
             isRemoteUpdateRef.current = false;
           }, 300);
         }
+        // Sinkronisasi opsi kustom dari Cloud
+        if (snapData && Array.isArray(snapData.customOptions) && snapData.customOptions.length > 0) {
+          setCustomBentukList(prev => {
+            const merged = Array.from(new Set([...prev, ...snapData.customOptions]));
+            try {
+              localStorage.setItem('ppbr_m12_custom_bentuk_pengawasan', JSON.stringify(merged));
+            } catch (_) {}
+            return merged;
+          });
+        }
       } else {
         // If not in Firestore yet and local has data, initialize in Firestore
         if (data.length > 0) {
           setDoc(docRef, {
             items: data,
+            customOptions: customBentukList,
             updatedAt: new Date().toISOString(),
             title: `Area Pengawasan Mandatory (${currentYear})`
           }, { merge: true }).catch(err => {
@@ -286,10 +421,11 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
     const doCloudSave = async () => {
       try {
         const nowIso = new Date().toISOString();
-        await setDoc(doc(db, 'ppbr_data', 'area_mandatory'), {
+        await setDoc(doc(db, 'ppbr_data', docId), {
           items: newData,
+          customOptions: customBentukList,
           updatedAt: nowIso,
-          title: 'Area Pengawasan Mandatory'
+          title: `Area Pengawasan Mandatory (${currentYear})`
         }, { merge: true });
         setCloudStatus('synced');
         setLastSyncedTime(new Date(nowIso).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
@@ -440,12 +576,20 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
   // Item additions & row controls
   const handleAddItem = (e: React.FormEvent) => {
     e.preventDefault();
+    const selectedJenis = isCustomBentukAdd
+      ? (customBentukAddInput.trim() || 'Monitoring')
+      : newItem.jenisPengawasan;
+
+    if (selectedJenis && selectedJenis.trim()) {
+      saveNewBentukOption(selectedJenis);
+    }
+
     const item: AreaMandatoryItem = {
       id: `am-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       no: data.length + 1,
       areaPengawasan: newItem.areaPengawasan,
       dasarHukum: newItem.dasarHukum,
-      jenisPengawasan: newItem.jenisPengawasan,
+      jenisPengawasan: selectedJenis,
       alokasiMandays: Number(newItem.alokasiMandays),
       keterangan: newItem.keterangan
     };
@@ -453,7 +597,9 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
     const updated = [...data, item];
     handleSaveData(updated);
     setShowAddModal(false);
-    setNewItem({ areaPengawasan: '', dasarHukum: '', jenisPengawasan: 'Reviu', alokasiMandays: 20, keterangan: 'Mandat Peraturan' });
+    setIsCustomBentukAdd(false);
+    setCustomBentukAddInput('');
+    setNewItem({ areaPengawasan: '', dasarHukum: '', jenisPengawasan: 'Monitoring', alokasiMandays: 20, keterangan: 'Mandat Peraturan Perundang-undangan' });
   };
 
   const handleAddMultipleRows = (count: number) => {
@@ -465,7 +611,7 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
         no: data.length + i + 1,
         areaPengawasan: `Penugasan Mandatory ${data.length + i + 1}`,
         dasarHukum: 'Peraturan Perundang-undangan',
-        jenisPengawasan: 'Reviu',
+        jenisPengawasan: 'Monitoring',
         alokasiMandays: 15,
         keterangan: 'Rencana Pengawasan Tahunan'
       });
@@ -487,19 +633,35 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
 
   const handleOpenEdit = (item: AreaMandatoryItem) => {
     setEditingItem({ ...item });
+    setIsCustomBentukEdit(false);
+    setCustomBentukEditInput('');
+    setQuickNewOptionEdit('');
+    setOptionSuccessMsg(null);
     setShowEditModal(true);
   };
 
   const handleSaveEdit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingItem) return;
+
+    const selectedJenis = isCustomBentukEdit
+      ? (customBentukEditInput.trim() || editingItem.jenisPengawasan || 'Monitoring')
+      : editingItem.jenisPengawasan;
+
+    if (selectedJenis && selectedJenis.trim()) {
+      saveNewBentukOption(selectedJenis);
+    }
+
     const updatedItem: AreaMandatoryItem = {
       ...editingItem,
+      jenisPengawasan: selectedJenis,
       alokasiMandays: Number(editingItem.alokasiMandays)
     };
     const updated = data.map(d => d.id === updatedItem.id ? updatedItem : d);
     handleSaveData(updated);
     setShowEditModal(false);
+    setIsCustomBentukEdit(false);
+    setCustomBentukEditInput('');
     setEditingItem(null);
   };
 
@@ -782,11 +944,11 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
 
         <div className="flex flex-wrap items-center gap-2 w-full md:w-auto justify-end">
           <button
-            onClick={() => setShowAddModal(true)}
+            onClick={handleOpenAddModal}
             className="px-3.5 py-2 bg-red-600 hover:bg-red-500 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition"
           >
             <Plus className="w-4 h-4" />
-            <span>Tambah Data</span>
+            <span>Tambahkan Data</span>
           </button>
 
           <button
@@ -871,7 +1033,7 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
                       </div>
                       <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
                         <button
-                          onClick={() => setShowAddModal(true)}
+                          onClick={handleOpenAddModal}
                           className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-semibold inline-flex items-center gap-1.5 transition"
                         >
                           <Plus className="w-4 h-4" />
@@ -911,7 +1073,20 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
                     </td>
                     <td className="p-3 text-slate-700 text-xs italic">{item.dasarHukum}</td>
                     <td className="p-3">
-                      <span className="px-2.5 py-1 bg-slate-100 text-slate-800 rounded-md font-semibold text-[11px] border border-slate-200">
+                      <span className={`px-2.5 py-1 rounded-md font-semibold text-[11px] border inline-flex items-center gap-1 ${
+                        item.jenisPengawasan === 'Monitoring'
+                          ? 'bg-sky-50 text-sky-800 border-sky-300 shadow-xs'
+                          : item.jenisPengawasan === 'Reviu'
+                          ? 'bg-blue-50 text-blue-800 border-blue-300'
+                          : item.jenisPengawasan === 'Evaluasi'
+                          ? 'bg-purple-50 text-purple-800 border-purple-300'
+                          : item.jenisPengawasan === 'Pemantauan'
+                          ? 'bg-amber-50 text-amber-800 border-amber-300'
+                          : item.jenisPengawasan?.toLowerCase().includes('audit')
+                          ? 'bg-rose-50 text-rose-800 border-rose-300'
+                          : 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                      }`}>
+                        {item.jenisPengawasan === 'Monitoring' && <span className="w-1.5 h-1.5 rounded-full bg-sky-500"></span>}
                         {item.jenisPengawasan}
                       </span>
                     </td>
@@ -1131,22 +1306,179 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Bentuk Pengawasan *</label>
-                  <select
-                    value={newItem.jenisPengawasan}
-                    onChange={e => setNewItem({ ...newItem, jenisPengawasan: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-medium focus:ring-2 focus:ring-red-500 focus:outline-hidden"
-                  >
-                    <option value="Audit Kinerja">Audit Kinerja</option>
-                    <option value="Audit Ketaatan">Audit Ketaatan</option>
-                    <option value="Reviu">Reviu</option>
-                    <option value="Evaluasi">Evaluasi</option>
-                    <option value="Pemantauan">Pemantauan</option>
-                    <option value="Asistensi / Bimtek">Asistensi / Bimtek</option>
-                  </select>
+              <div className="space-y-3">
+                <div className="bg-slate-50/70 p-3 rounded-xl border border-slate-200">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block text-xs font-bold text-slate-800">
+                      Bentuk Pengawasan *
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsCustomBentukAdd(!isCustomBentukAdd);
+                        if (!isCustomBentukAdd) {
+                          setCustomBentukAddInput('');
+                        }
+                      }}
+                      className="text-[11px] font-semibold text-red-600 hover:text-red-700 bg-red-50 hover:bg-red-100 px-2.5 py-1 rounded-lg border border-red-200 flex items-center gap-1 transition"
+                    >
+                      <Plus className="w-3 h-3" />
+                      <span>{isCustomBentukAdd ? 'Pilih dari Dropdown' : '✍️ Isi Sendiri / Tambah Pilihan'}</span>
+                    </button>
+                  </div>
+
+                  {!isCustomBentukAdd ? (
+                    <div className="space-y-2">
+                      <select
+                        value={newItem.jenisPengawasan}
+                        onChange={e => {
+                          if (e.target.value === '__CUSTOM__') {
+                            setIsCustomBentukAdd(true);
+                            setCustomBentukAddInput('');
+                          } else {
+                            setNewItem({ ...newItem, jenisPengawasan: e.target.value });
+                          }
+                        }}
+                        className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-semibold text-slate-800 focus:ring-2 focus:ring-red-500 focus:outline-hidden bg-white shadow-xs"
+                      >
+                        <optgroup label="Standar Bentuk Pengawasan">
+                          {DEFAULT_BENTUK_PENGAWASAN_MANDATORY.map(opt => (
+                            <option key={opt} value={opt}>
+                              {opt === 'Monitoring' ? '⭐ Monitoring' : opt}
+                            </option>
+                          ))}
+                        </optgroup>
+                        {customBentukList.length > 0 && (
+                          <optgroup label="Pilihan Tambahan / Kustom">
+                            {customBentukList.map(opt => (
+                              <option key={opt} value={opt}>
+                                📌 {opt}
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
+                        <option value="__CUSTOM__" className="font-bold text-red-600 bg-red-50">
+                          ➕ Isi Sendiri (Ketik & Tambahkan ke Dropdown...)
+                        </option>
+                      </select>
+
+                      {/* Quick Add Bar: Tambah langsung ke Dropdown */}
+                      <div className="flex items-center gap-1.5 p-2 bg-white border border-slate-200 rounded-xl">
+                        <input
+                          type="text"
+                          value={quickNewOptionAdd}
+                          onChange={e => setQuickNewOptionAdd(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleAddNewCustomOptionDirectly(quickNewOptionAdd, 'add');
+                            }
+                          }}
+                          placeholder="Ketik bentuk baru lalu klik Tambah ke Dropdown..."
+                          className="flex-1 px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs placeholder:text-slate-400 focus:bg-white focus:outline-hidden focus:ring-1 focus:ring-red-500"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleAddNewCustomOptionDirectly(quickNewOptionAdd, 'add')}
+                          disabled={!quickNewOptionAdd.trim()}
+                          className="px-3 py-1.5 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold shrink-0 transition flex items-center gap-1 shadow-xs"
+                          title="Tambahkan opsi ini ke pilihan dropdown"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>Tambah ke Dropdown</span>
+                        </button>
+                      </div>
+
+                      {/* Feedback message saat opsi berhasil ditambah */}
+                      {optionSuccessMsg && (
+                        <div className="text-[11px] font-semibold text-emerald-800 bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-200 flex items-center gap-1.5">
+                          <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                          <span>{optionSuccessMsg}</span>
+                        </div>
+                      )}
+
+                      {/* Chips opsi kustom yang sudah ditambahkan user */}
+                      {customBentukList.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1 pt-0.5">
+                          <span className="text-[10px] text-slate-500 font-medium">Opsi kustom di dropdown:</span>
+                          {customBentukList.map(opt => (
+                            <span
+                              key={opt}
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold border transition ${
+                                newItem.jenisPengawasan === opt
+                                  ? 'bg-red-100 text-red-900 border-red-300'
+                                  : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
+                              }`}
+                            >
+                              <span
+                                className="cursor-pointer"
+                                onClick={() => setNewItem({ ...newItem, jenisPengawasan: opt })}
+                                title="Pilih opsi ini"
+                              >
+                                {opt}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteCustomOption(opt)}
+                                className="text-slate-400 hover:text-red-700 ml-0.5"
+                                title="Hapus opsi ini dari dropdown"
+                              >
+                                <X className="w-2.5 h-2.5" />
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="p-3 bg-red-50/80 border-2 border-red-400 rounded-xl space-y-2.5 shadow-xs">
+                      <div className="flex items-center justify-between text-xs font-bold text-red-950">
+                        <span>✍️ Tulis Bentuk Pengawasan Baru (Isi Sendiri):</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsCustomBentukAdd(false);
+                            setNewItem({ ...newItem, jenisPengawasan: availableBentukOptions[0] || 'Monitoring' });
+                          }}
+                          className="text-[11px] text-slate-600 hover:text-slate-900 font-semibold underline"
+                        >
+                          Kembali ke Dropdown
+                        </button>
+                      </div>
+                      <input
+                        type="text"
+                        required
+                        value={customBentukAddInput}
+                        onChange={e => {
+                          setCustomBentukAddInput(e.target.value);
+                          setNewItem({ ...newItem, jenisPengawasan: e.target.value });
+                        }}
+                        placeholder="Contoh: Monitoring Dana Desa, Audit Investigasi Khusus, Pendampingan SPM..."
+                        className="w-full px-3 py-2 bg-white border border-red-300 rounded-lg text-xs font-semibold text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-red-500 shadow-xs"
+                        autoFocus
+                      />
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (customBentukAddInput.trim()) {
+                              handleAddNewCustomOptionDirectly(customBentukAddInput, 'add');
+                            }
+                          }}
+                          disabled={!customBentukAddInput.trim()}
+                          className="px-3.5 py-1.5 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-xs transition"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>Simpan ke Dropdown & Pilih</span>
+                        </button>
+                        <span className="text-[10px] text-slate-600 italic">
+                          💡 Otomatis tersimpan ke pilihan dropdown laptop ini & Cloud.
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </div>
+
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Alokasi Mandays (Hari) *</label>
                   <input
@@ -1228,22 +1560,179 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Bentuk Pengawasan *</label>
-                  <select
-                    value={editingItem.jenisPengawasan}
-                    onChange={e => setEditingItem({ ...editingItem, jenisPengawasan: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-medium focus:ring-2 focus:ring-red-500 focus:outline-hidden"
-                  >
-                    <option value="Audit Kinerja">Audit Kinerja</option>
-                    <option value="Audit Ketaatan">Audit Ketaatan</option>
-                    <option value="Reviu">Reviu</option>
-                    <option value="Evaluasi">Evaluasi</option>
-                    <option value="Pemantauan">Pemantauan</option>
-                    <option value="Asistensi / Bimtek">Asistensi / Bimtek</option>
-                  </select>
+              <div className="space-y-3">
+                <div className="bg-slate-50/70 p-3 rounded-xl border border-slate-200">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block text-xs font-bold text-slate-800">
+                      Bentuk Pengawasan *
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsCustomBentukEdit(!isCustomBentukEdit);
+                        if (!isCustomBentukEdit) {
+                          setCustomBentukEditInput('');
+                        }
+                      }}
+                      className="text-[11px] font-semibold text-red-600 hover:text-red-700 bg-red-50 hover:bg-red-100 px-2.5 py-1 rounded-lg border border-red-200 flex items-center gap-1 transition"
+                    >
+                      <Plus className="w-3 h-3" />
+                      <span>{isCustomBentukEdit ? 'Pilih dari Dropdown' : '✍️ Isi Sendiri / Tambah Pilihan'}</span>
+                    </button>
+                  </div>
+
+                  {!isCustomBentukEdit ? (
+                    <div className="space-y-2">
+                      <select
+                        value={editingItem.jenisPengawasan}
+                        onChange={e => {
+                          if (e.target.value === '__CUSTOM__') {
+                            setIsCustomBentukEdit(true);
+                            setCustomBentukEditInput('');
+                          } else {
+                            setEditingItem({ ...editingItem, jenisPengawasan: e.target.value });
+                          }
+                        }}
+                        className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-semibold text-slate-800 focus:ring-2 focus:ring-red-500 focus:outline-hidden bg-white shadow-xs"
+                      >
+                        <optgroup label="Standar Bentuk Pengawasan">
+                          {DEFAULT_BENTUK_PENGAWASAN_MANDATORY.map(opt => (
+                            <option key={opt} value={opt}>
+                              {opt === 'Monitoring' ? '⭐ Monitoring' : opt}
+                            </option>
+                          ))}
+                        </optgroup>
+                        {customBentukList.length > 0 && (
+                          <optgroup label="Pilihan Tambahan / Kustom">
+                            {customBentukList.map(opt => (
+                              <option key={opt} value={opt}>
+                                📌 {opt}
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
+                        <option value="__CUSTOM__" className="font-bold text-red-600 bg-red-50">
+                          ➕ Isi Sendiri (Ketik & Tambahkan ke Dropdown...)
+                        </option>
+                      </select>
+
+                      {/* Quick Add Bar: Tambah langsung ke Dropdown */}
+                      <div className="flex items-center gap-1.5 p-2 bg-white border border-slate-200 rounded-xl">
+                        <input
+                          type="text"
+                          value={quickNewOptionEdit}
+                          onChange={e => setQuickNewOptionEdit(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleAddNewCustomOptionDirectly(quickNewOptionEdit, 'edit');
+                            }
+                          }}
+                          placeholder="Ketik bentuk baru lalu klik Tambah ke Dropdown..."
+                          className="flex-1 px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs placeholder:text-slate-400 focus:bg-white focus:outline-hidden focus:ring-1 focus:ring-red-500"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleAddNewCustomOptionDirectly(quickNewOptionEdit, 'edit')}
+                          disabled={!quickNewOptionEdit.trim()}
+                          className="px-3 py-1.5 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold shrink-0 transition flex items-center gap-1 shadow-xs"
+                          title="Tambahkan opsi ini ke pilihan dropdown"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>Tambah ke Dropdown</span>
+                        </button>
+                      </div>
+
+                      {/* Feedback message saat opsi berhasil ditambah */}
+                      {optionSuccessMsg && (
+                        <div className="text-[11px] font-semibold text-emerald-800 bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-200 flex items-center gap-1.5">
+                          <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                          <span>{optionSuccessMsg}</span>
+                        </div>
+                      )}
+
+                      {/* Chips opsi kustom yang sudah ditambahkan user */}
+                      {customBentukList.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1 pt-0.5">
+                          <span className="text-[10px] text-slate-500 font-medium">Opsi kustom di dropdown:</span>
+                          {customBentukList.map(opt => (
+                            <span
+                              key={opt}
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold border transition ${
+                                editingItem.jenisPengawasan === opt
+                                  ? 'bg-red-100 text-red-900 border-red-300'
+                                  : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
+                              }`}
+                            >
+                              <span
+                                className="cursor-pointer"
+                                onClick={() => setEditingItem({ ...editingItem, jenisPengawasan: opt })}
+                                title="Pilih opsi ini"
+                              >
+                                {opt}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteCustomOption(opt)}
+                                className="text-slate-400 hover:text-red-700 ml-0.5"
+                                title="Hapus opsi ini dari dropdown"
+                              >
+                                <X className="w-2.5 h-2.5" />
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="p-3 bg-red-50/80 border-2 border-red-400 rounded-xl space-y-2.5 shadow-xs">
+                      <div className="flex items-center justify-between text-xs font-bold text-red-950">
+                        <span>✍️ Tulis Bentuk Pengawasan Baru (Isi Sendiri):</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsCustomBentukEdit(false);
+                            setEditingItem({ ...editingItem, jenisPengawasan: availableBentukOptions[0] || 'Monitoring' });
+                          }}
+                          className="text-[11px] text-slate-600 hover:text-slate-900 font-semibold underline"
+                        >
+                          Kembali ke Dropdown
+                        </button>
+                      </div>
+                      <input
+                        type="text"
+                        required
+                        value={customBentukEditInput}
+                        onChange={e => {
+                          setCustomBentukEditInput(e.target.value);
+                          setEditingItem({ ...editingItem, jenisPengawasan: e.target.value });
+                        }}
+                        placeholder="Contoh: Monitoring Dana Desa, Audit Investigasi Khusus, Pendampingan SPM..."
+                        className="w-full px-3 py-2 bg-white border border-red-300 rounded-lg text-xs font-semibold text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-red-500 shadow-xs"
+                        autoFocus
+                      />
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (customBentukEditInput.trim()) {
+                              handleAddNewCustomOptionDirectly(customBentukEditInput, 'edit');
+                            }
+                          }}
+                          disabled={!customBentukEditInput.trim()}
+                          className="px-3.5 py-1.5 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-xs transition"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>Simpan ke Dropdown & Pilih</span>
+                        </button>
+                        <span className="text-[10px] text-slate-600 italic">
+                          💡 Otomatis tersimpan ke pilihan dropdown laptop ini & Cloud.
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </div>
+
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Alokasi Mandays (Hari) *</label>
                   <input
