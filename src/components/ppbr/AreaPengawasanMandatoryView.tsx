@@ -31,7 +31,9 @@ import {
   History,
   UserCheck,
   Laptop,
-  Lock
+  Lock,
+  ArrowLeft,
+  Filter
 } from 'lucide-react';
 import { getDeviceOperatorName, DeviceOperatorBadge } from '../common/DeviceRegistrationModal';
 
@@ -45,6 +47,67 @@ export interface AreaMandatoryVersion {
   items: AreaMandatoryItem[];
   actionDescription: string;
 }
+
+export const OPERATOR_PALETTES = [
+  {
+    name: 'purple',
+    dotHex: '#9333EA', // purple (matches Google Sheets edit color)
+    cellBg: 'bg-purple-200/90 hover:bg-purple-200',
+    cellText: 'text-purple-950 font-semibold',
+    cellBorder: 'border-2 border-purple-500 shadow-xs ring-1 ring-purple-400/50',
+    pill: 'bg-purple-100 text-purple-900 border border-purple-300'
+  },
+  {
+    name: 'teal',
+    dotHex: '#0D9488', // teal
+    cellBg: 'bg-teal-200/90 hover:bg-teal-200',
+    cellText: 'text-teal-950 font-semibold',
+    cellBorder: 'border-2 border-teal-500 shadow-xs ring-1 ring-teal-400/50',
+    pill: 'bg-teal-100 text-teal-900 border border-teal-300'
+  },
+  {
+    name: 'blue',
+    dotHex: '#2563EB', // blue
+    cellBg: 'bg-blue-200/90 hover:bg-blue-200',
+    cellText: 'text-blue-950 font-semibold',
+    cellBorder: 'border-2 border-blue-500 shadow-xs ring-1 ring-blue-400/50',
+    pill: 'bg-blue-100 text-blue-900 border border-blue-300'
+  },
+  {
+    name: 'amber',
+    dotHex: '#D97706', // amber
+    cellBg: 'bg-amber-200/90 hover:bg-amber-200',
+    cellText: 'text-amber-950 font-semibold',
+    cellBorder: 'border-2 border-amber-500 shadow-xs ring-1 ring-amber-400/50',
+    pill: 'bg-amber-100 text-amber-900 border border-amber-300'
+  },
+  {
+    name: 'emerald',
+    dotHex: '#059669', // emerald
+    cellBg: 'bg-emerald-200/90 hover:bg-emerald-200',
+    cellText: 'text-emerald-950 font-semibold',
+    cellBorder: 'border-2 border-emerald-500 shadow-xs ring-1 ring-emerald-400/50',
+    pill: 'bg-emerald-100 text-emerald-900 border border-emerald-300'
+  },
+  {
+    name: 'rose',
+    dotHex: '#E11D48', // rose
+    cellBg: 'bg-rose-200/90 hover:bg-rose-200',
+    cellText: 'text-rose-950 font-semibold',
+    cellBorder: 'border-2 border-rose-500 shadow-xs ring-1 ring-rose-400/50',
+    pill: 'bg-rose-100 text-rose-900 border border-rose-300'
+  }
+];
+
+export const getOperatorPalette = (name: string) => {
+  if (!name) return OPERATOR_PALETTES[0];
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const index = Math.abs(hash) % OPERATOR_PALETTES.length;
+  return OPERATOR_PALETTES[index];
+};
 
 export const DEFAULT_BENTUK_PENGAWASAN_MANDATORY = [
   'Reviu',
@@ -141,13 +204,18 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
   const storageKey = getScopedKey('ppbr_area_mandatory', currentYear);
   const docId = getScopedPPBRDocId('area_mandatory', currentYear);
 
-  const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
+  const isAdmin = (() => {
     try {
       const saved = localStorage.getItem('isman_user');
       if (saved) {
         const u = JSON.parse(saved);
+        const name = (u.username || '').toLowerCase();
+        const role = (u.role || '').toLowerCase();
+        if (name === 'admin' || role === 'administrator' || name.includes('inspektorat') || role.includes('inspektorat')) {
+          return true;
+        }
         if (u.role === 'Operator') return false;
-        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.username?.toLowerCase() === 'admin';
+        return true;
       }
     } catch (_) {}
     return true;
@@ -224,6 +292,38 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
   });
   const [showHistoryModal, setShowHistoryModal] = useState<boolean>(false);
   const [selectedHistoryVersion, setSelectedHistoryVersion] = useState<AreaMandatoryVersion | null>(null);
+  const [highlightChanges, setHighlightChanges] = useState<boolean>(true);
+  const [showOnlyModifiedRows, setShowOnlyModifiedRows] = useState<boolean>(false);
+
+  // Initial version seeding so Version History always has data ready to view immediately
+  useEffect(() => {
+    if (data.length > 0 && historyVersions.length === 0) {
+      const initialVer: AreaMandatoryVersion = {
+        id: `v-init-${currentYear}`,
+        timestamp: new Date().toISOString(),
+        formattedTime: 'Versi Data Saat Ini (' + currentYear + ')',
+        operatorName: getDeviceOperatorName() || 'Sistem / Data Aktif',
+        itemCount: data.length,
+        totalMandays: data.reduce((acc, c) => acc + (Number(c.alokasiMandays) || 0), 0),
+        items: data,
+        actionDescription: `Rekaman data aktif (${data.length} objek penugasan)`
+      };
+      setHistoryVersions([initialVer]);
+      try {
+        localStorage.setItem(storageKey + '_history', JSON.stringify([initialVer]));
+      } catch (_) {}
+    }
+  }, [data.length, currentYear, storageKey, historyVersions.length]);
+
+  // Global event listener to open Version History from top navbar or any shortcut
+  useEffect(() => {
+    const handleOpenHistoryEvent = () => {
+      setSelectedHistoryVersion(historyVersions[0] || null);
+      setShowHistoryModal(true);
+    };
+    window.addEventListener('open_ppbr_history_modal', handleOpenHistoryEvent);
+    return () => window.removeEventListener('open_ppbr_history_modal', handleOpenHistoryEvent);
+  }, [historyVersions]);
 
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
@@ -883,25 +983,23 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            {/* Riwayat Versi Button (Khusus Admin) */}
-            {isAdmin && (
-              <button
-                onClick={() => {
-                  setSelectedHistoryVersion(historyVersions[0] || null);
-                  setShowHistoryModal(true);
-                }}
-                className="px-3.5 py-2 bg-slate-900/90 hover:bg-slate-900 text-amber-300 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition border border-amber-400/40"
-                title="Buka Riwayat Versi & Audit Trail Pengisian (Khusus Administrator)"
-              >
-                <History className="w-3.5 h-3.5 text-amber-400" />
-                <span>Riwayat Versi</span>
-                {historyVersions.length > 0 && (
-                  <span className="px-1.5 py-0.2 bg-amber-400/20 text-amber-300 rounded-full text-[10px]">
-                    {historyVersions.length}
-                  </span>
-                )}
-              </button>
-            )}
+            {/* Riwayat Versi Button */}
+            <button
+              onClick={() => {
+                setSelectedHistoryVersion(historyVersions[0] || null);
+                setShowHistoryModal(true);
+              }}
+              className="px-4 py-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 rounded-xl text-xs font-black flex items-center gap-1.5 shadow-md transition border-2 border-amber-300 transform active:scale-95 cursor-pointer"
+              title="Buka Riwayat Versi & Audit Trail Pengisian (Lihat data yang terhapus/diedit & pulihkan)"
+            >
+              <History className="w-4 h-4 text-slate-950" />
+              <span>🕒 Riwayat Versi</span>
+              {historyVersions.length > 0 && (
+                <span className="px-1.5 py-0.5 bg-slate-950 text-amber-300 rounded-full text-[10px] font-bold">
+                  {historyVersions.length}
+                </span>
+              )}
+            </button>
 
             {/* Manual Sync / Refresh Button (Khusus Admin) */}
             {isAdmin && (
@@ -1051,24 +1149,23 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
         </div>
 
         <div className="flex flex-wrap items-center gap-2 w-full md:w-auto justify-end">
-          {isAdmin && (
-            <button
-              onClick={() => {
-                setSelectedHistoryVersion(historyVersions[0] || null);
-                setShowHistoryModal(true);
-              }}
-              className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-amber-300 border border-slate-700 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition"
-              title="Buka Riwayat Versi & Audit Trail Pengisian (Khusus Administrator)"
-            >
-              <History className="w-3.5 h-3.5 text-amber-400" />
-              <span>Riwayat Versi</span>
-              {historyVersions.length > 0 && (
-                <span className="px-1.5 py-0.2 bg-amber-400/20 text-amber-300 rounded-full text-[10px]">
-                  {historyVersions.length}
-                </span>
-              )}
-            </button>
-          )}
+          {/* Tombol Riwayat Versi di atas tabel */}
+          <button
+            onClick={() => {
+              setSelectedHistoryVersion(historyVersions[0] || null);
+              setShowHistoryModal(true);
+            }}
+            className="px-3.5 py-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 border border-amber-300 rounded-xl text-xs font-black flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+            title="Buka Riwayat Versi & Audit Trail Pengisian (Lihat data yang terhapus/diedit & pulihkan)"
+          >
+            <History className="w-3.5 h-3.5 text-slate-950" />
+            <span>🕒 Riwayat Versi</span>
+            {historyVersions.length > 0 && (
+              <span className="px-1.5 py-0.5 bg-slate-950 text-amber-300 rounded-full text-[10px] font-bold">
+                {historyVersions.length}
+              </span>
+            )}
+          </button>
 
           <button
             onClick={handleOpenAddModal}
@@ -1903,237 +2000,428 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
         </div>
       )}
 
-      {/* Version History & Audit Trail Modal (Admin Only) */}
-      {isAdmin && showHistoryModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-3 md:p-6 backdrop-blur-xs animate-in fade-in duration-200">
-          <div className="bg-white rounded-3xl shadow-2xl max-w-5xl w-full max-h-[92vh] flex flex-col border border-slate-200 overflow-hidden">
-            {/* Modal Header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-slate-900 text-white">
-              <div className="flex items-center gap-3">
-                <div className="p-2.5 bg-amber-500/20 text-amber-400 rounded-2xl border border-amber-500/30">
-                  <History className="w-5 h-5" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="font-bold text-base text-white">
-                      Riwayat Versi & Audit Trail
-                    </h3>
-                    <span className="px-2 py-0.5 bg-amber-500/20 text-amber-300 rounded-full text-[10px] font-bold uppercase tracking-wider border border-amber-400/30">
-                      Khusus Administrator
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-300">
-                    Menu 12: Area Pengawasan Mandatory ({currentYear}) — Rekam jejak pengisian & pemulihan data terhapus
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => {
-                  setShowHistoryModal(false);
-                  setSelectedHistoryVersion(null);
-                }}
-                className="text-slate-400 hover:text-white p-1.5 rounded-xl hover:bg-slate-800 transition cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
+      {/* Version History & Audit Trail Modal (Google Sheets Style) */}
+      {showHistoryModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-2 md:p-5 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-7xl w-full h-[94vh] flex flex-col border border-slate-300 overflow-hidden">
+            {(() => {
+              const targetVer = selectedHistoryVersion || historyVersions[0];
+              const currentIndex = targetVer ? historyVersions.findIndex(v => v.id === targetVer.id) : -1;
+              const prevVer = currentIndex >= 0 && currentIndex < historyVersions.length - 1
+                ? historyVersions[currentIndex + 1]
+                : null;
 
-            {/* Modal Body: 2 Columns */}
-            <div className="flex-1 flex flex-col md:flex-row overflow-hidden min-h-[440px]">
-              {/* Left Column: List of versions */}
-              <div className="w-full md:w-80 border-r border-slate-200 flex flex-col bg-slate-50/70 shrink-0">
-                <div className="p-3 border-b border-slate-200 bg-white flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-700">Daftar Versi Waktu</span>
-                  <span className="text-[11px] font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
-                    {historyVersions.length} Rekaman
-                  </span>
-                </div>
+              // Baseline data to compare with for diffs
+              const baselineItems = prevVer ? prevVer.items : (historyVersions.length === 1 && data.length > 0 && targetVer?.items !== data ? data : STANDARD_MANDATORY_RECOMMENDATIONS);
 
-                <div className="flex-1 overflow-y-auto divide-y divide-slate-200 p-2 space-y-1.5">
-                  {historyVersions.length === 0 ? (
-                    <div className="p-8 text-center text-slate-400 space-y-2">
-                      <Clock className="w-8 h-8 mx-auto text-slate-300" />
-                      <p className="text-xs font-medium">Belum ada riwayat tercatat.</p>
-                      <p className="text-[11px] text-slate-400">
-                        Riwayat akan otomatis terisi saat data di tabel ini ditambah, diubah, atau dihapus.
-                      </p>
-                    </div>
-                  ) : (
-                    historyVersions.map((v, idx) => {
-                      const isSelected = selectedHistoryVersion ? selectedHistoryVersion.id === v.id : idx === 0;
-                      const isLatest = idx === 0;
-                      return (
-                        <div
-                          key={v.id}
-                          onClick={() => setSelectedHistoryVersion(v)}
-                          className={`p-3 rounded-2xl cursor-pointer transition border text-left space-y-1.5 ${
-                            isSelected
-                              ? 'bg-amber-50/90 border-amber-400 shadow-xs ring-1 ring-amber-300'
-                              : 'bg-white border-slate-200 hover:bg-slate-100/70 hover:border-slate-300'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between gap-1">
-                            <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                              <Clock className="w-3 h-3 text-slate-400" />
-                              <span>{v.formattedTime}</span>
-                            </span>
-                            {isLatest && (
-                              <span className="px-1.5 py-0.5 bg-emerald-100 text-emerald-800 rounded-md text-[9px] font-bold">
-                                Aktif
-                              </span>
-                            )}
-                          </div>
+              // Palette for target version operator
+              const palette = getOperatorPalette(targetVer?.operatorName || '');
 
-                          <div className="flex items-center gap-1 text-[11px] text-slate-700 font-medium">
-                            <Laptop className="w-3 h-3 text-teal-600 shrink-0" />
-                            <span className="truncate">Oleh: <strong>{v.operatorName}</strong></span>
-                          </div>
-
-                          <div className="flex items-center justify-between text-[11px] text-slate-500 pt-0.5">
-                            <span>{v.itemCount} objek • {v.totalMandays} mandays</span>
-                            <span className="text-[10px] text-amber-800 font-semibold truncate max-w-[110px]" title={v.actionDescription}>
-                              {v.actionDescription}
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
-
-              {/* Right Column: Version Details & Preview Table */}
-              <div className="flex-1 flex flex-col bg-white overflow-hidden">
-                {(() => {
-                  const targetVer = selectedHistoryVersion || historyVersions[0];
-                  if (!targetVer) {
-                    return (
-                      <div className="flex-1 flex items-center justify-center p-8 text-center text-slate-400">
-                        <div className="space-y-2">
-                          <History className="w-10 h-10 mx-auto text-slate-300" />
-                          <h4 className="font-bold text-sm text-slate-700">Pilih salah satu versi di sebelah kiri</h4>
-                          <p className="text-xs text-slate-400 max-w-sm">
-                            Anda dapat melihat isi tabel pada tanggal dan jam tersebut, serta memulihkan data jika terhapus.
-                          </p>
-                        </div>
-                      </div>
-                    );
+              // Count total edits in this version compared to baseline
+              let totalEditsCount = 0;
+              if (targetVer) {
+                targetVer.items.forEach(item => {
+                  const bItem = baselineItems.find(b => 
+                    (b.id && item.id && b.id === item.id) || 
+                    (b.areaPengawasan && item.areaPengawasan && b.areaPengawasan.trim().toLowerCase() === item.areaPengawasan.trim().toLowerCase())
+                  );
+                  if (!bItem) {
+                    totalEditsCount += 1;
+                  } else {
+                    if (item.areaPengawasan?.trim() !== bItem.areaPengawasan?.trim()) totalEditsCount++;
+                    if (item.dasarHukum?.trim() !== bItem.dasarHukum?.trim()) totalEditsCount++;
+                    if (item.jenisPengawasan?.trim() !== bItem.jenisPengawasan?.trim()) totalEditsCount++;
+                    if (Number(item.alokasiMandays) !== Number(bItem.alokasiMandays)) totalEditsCount++;
+                    if ((item.keterangan || '').trim() !== (bItem.keterangan || '').trim()) totalEditsCount++;
                   }
+                });
+              }
 
-                  const isCurrentActive = targetVer.id === historyVersions[0]?.id;
-                  const diffCount = targetVer.itemCount - data.length;
+              const isCurrentActive = targetVer && historyVersions[0] && targetVer.id === historyVersions[0].id;
+              const diffCount = targetVer ? targetVer.itemCount - data.length : 0;
 
-                  return (
-                    <div className="flex-1 flex flex-col overflow-hidden">
-                      {/* Top Action Bar */}
-                      <div className="p-4 bg-slate-50 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <h4 className="font-bold text-sm text-slate-900">
-                              Versi: {targetVer.formattedTime}
-                            </h4>
-                            <span className="px-2 py-0.5 bg-blue-100 text-blue-900 rounded-md text-[10px] font-bold">
-                              {targetVer.itemCount} Objek ({targetVer.totalMandays} Mandays)
-                            </span>
-                          </div>
-                          <div className="text-xs text-slate-600 mt-0.5 flex flex-wrap items-center gap-1.5">
-                            <span>Disimpan oleh pemegang laptop:</span>
-                            <span className="font-bold text-teal-800 bg-teal-50 px-2 py-0.5 rounded border border-teal-200 inline-flex items-center gap-1">
-                              <Laptop className="w-3 h-3 text-teal-600" />
-                              {targetVer.operatorName}
-                            </span>
-                            <span className="text-slate-400">•</span>
-                            <span className="italic text-slate-500">{targetVer.actionDescription}</span>
-                          </div>
-                        </div>
+              // Filter rows if user checked "Tampilkan hanya baris yang diedit"
+              const displayedItems = (targetVer?.items || []).filter(item => {
+                if (!showOnlyModifiedRows) return true;
+                const bItem = baselineItems.find(b => 
+                  (b.id && item.id && b.id === item.id) || 
+                  (b.areaPengawasan && item.areaPengawasan && b.areaPengawasan.trim().toLowerCase() === item.areaPengawasan.trim().toLowerCase())
+                );
+                if (!bItem) return true;
+                const isAreaDiff = item.areaPengawasan?.trim() !== bItem.areaPengawasan?.trim();
+                const isDasarDiff = item.dasarHukum?.trim() !== bItem.dasarHukum?.trim();
+                const isJenisDiff = item.jenisPengawasan?.trim() !== bItem.jenisPengawasan?.trim();
+                const isMandaysDiff = Number(item.alokasiMandays) !== Number(bItem.alokasiMandays);
+                const isKetDiff = (item.keterangan || '').trim() !== (bItem.keterangan || '').trim();
+                const isMissingNow = !data.some(d => d.areaPengawasan?.trim().toLowerCase() === item.areaPengawasan?.trim().toLowerCase());
+                return isAreaDiff || isDasarDiff || isJenisDiff || isMandaysDiff || isKetDiff || isMissingNow;
+              });
 
-                        {/* Restore Button */}
-                        <div className="flex items-center gap-2 shrink-0">
-                          {!isCurrentActive ? (
-                            <button
-                              onClick={() => handleRestoreVersion(targetVer)}
-                              className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-xl flex items-center gap-1.5 shadow-sm transition cursor-pointer"
-                              title="Kembalikan tabel aktif saat ini ke data pada versi ini"
-                            >
-                              <RotateCcw className="w-4 h-4" />
-                              <span>Pulihkan Versi Ini (Restore)</span>
-                            </button>
-                          ) : (
-                            <span className="px-3 py-1.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-semibold flex items-center gap-1">
-                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                              <span>Versi Aktif Saat Ini</span>
+              const unmodifiedCount = (targetVer?.items?.length || 0) - displayedItems.length;
+
+              return (
+                <div className="flex-1 flex flex-col overflow-hidden">
+                  {/* Top Bar (Google Sheets Style) */}
+                  <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200 bg-slate-900 text-white shrink-0">
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => {
+                          setShowHistoryModal(false);
+                          setSelectedHistoryVersion(null);
+                        }}
+                        className="p-1.5 text-slate-300 hover:text-white hover:bg-slate-800 rounded-xl transition cursor-pointer"
+                        title="Tutup Riwayat Versi"
+                      >
+                        <ArrowLeft className="w-5 h-5" />
+                      </button>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="font-bold text-sm md:text-base text-white">
+                            {targetVer ? targetVer.formattedTime : 'Riwayat Versi'}
+                          </h3>
+                          {targetVer && (
+                            <span className="px-2 py-0.5 bg-slate-800 border border-slate-700 text-slate-300 rounded-md text-[10px] font-semibold">
+                              Total: {totalEditsCount} perubahan diedit
                             </span>
                           )}
                         </div>
-                      </div>
-
-                      {/* Diff Warning Bar if data was deleted in current version */}
-                      {diffCount > 0 && (
-                        <div className="bg-amber-500/15 border-b border-amber-300/60 px-4 py-2 text-xs text-amber-950 flex items-center justify-between">
-                          <span className="font-medium">
-                            💡 Pada versi ini terdapat <strong>{diffCount} baris lebih banyak</strong> dibandingkan data tabel Anda saat ini.
-                          </span>
-                          <span className="text-[11px] font-bold text-amber-800">
-                            Bisa dipulihkan dengan tombol di atas
-                          </span>
-                        </div>
-                      )}
-
-                      {/* Preview Table */}
-                      <div className="flex-1 overflow-auto p-4">
-                        <table className="w-full text-left text-xs border-collapse">
-                          <thead>
-                            <tr className="bg-slate-100 text-slate-700 sticky top-0 border-b border-slate-200">
-                              <th className="p-2.5 text-center w-10">No</th>
-                              <th className="p-2.5">Area Pengawasan Mandatory</th>
-                              <th className="p-2.5">Dasar Hukum Regulasi</th>
-                              <th className="p-2.5">Bentuk Pengawasan</th>
-                              <th className="p-2.5 text-center w-24">Mandays</th>
-                              <th className="p-2.5">Keterangan</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100">
-                            {targetVer.items.map((item, idx) => {
-                              const isMissingNow = !data.some(d => d.areaPengawasan?.trim().toLowerCase() === item.areaPengawasan?.trim().toLowerCase());
-                              return (
-                                <tr
-                                  key={item.id || idx}
-                                  className={`transition ${
-                                    isMissingNow
-                                      ? 'bg-amber-50/70 hover:bg-amber-100/70'
-                                      : 'hover:bg-slate-50'
-                                  }`}
-                                >
-                                  <td className="p-2.5 text-center text-slate-500 font-medium">{item.no || idx + 1}</td>
-                                  <td className="p-2.5 font-bold text-slate-800">
-                                    <div className="flex items-center gap-1.5">
-                                      {isMissingNow && (
-                                        <span className="px-1.5 py-0.2 bg-amber-200 text-amber-900 rounded text-[9px] font-bold uppercase">
-                                          Hilang Sekarang
-                                        </span>
-                                      )}
-                                      <span>{item.areaPengawasan}</span>
-                                    </div>
-                                  </td>
-                                  <td className="p-2.5 text-slate-600 text-[11px] italic">{item.dasarHukum}</td>
-                                  <td className="p-2.5">
-                                    <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded text-[10px] font-semibold border border-slate-200">
-                                      {item.jenisPengawasan}
-                                    </span>
-                                  </td>
-                                  <td className="p-2.5 text-center font-bold text-red-900">{item.alokasiMandays} Hari</td>
-                                  <td className="p-2.5 text-slate-500 text-[11px]">{item.keterangan}</td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
+                        {targetVer && (
+                          <div className="flex items-center gap-2 text-xs text-slate-300 mt-0.5">
+                            <span className="inline-flex items-center gap-1.5 font-bold">
+                              <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: palette.dotHex }}></span>
+                              <span className="text-white">{targetVer.operatorName}</span>
+                            </span>
+                            <span className="text-slate-500">•</span>
+                            <span className="italic text-slate-400 truncate max-w-md">{targetVer.actionDescription}</span>
+                          </div>
+                        )}
                       </div>
                     </div>
-                  );
-                })()}
-              </div>
-            </div>
+
+                    <div className="flex items-center gap-3">
+                      {targetVer && !isCurrentActive ? (
+                        <button
+                          onClick={() => handleRestoreVersion(targetVer)}
+                          className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs rounded-xl flex items-center gap-1.5 shadow-md transition cursor-pointer"
+                          title="Kembalikan tabel aktif saat ini ke data pada versi ini"
+                        >
+                          <RotateCcw className="w-4 h-4" />
+                          <span>Pulihkan Versi Ini (Restore)</span>
+                        </button>
+                      ) : targetVer ? (
+                        <span className="px-3 py-1.5 bg-emerald-950/80 text-emerald-300 border border-emerald-600/60 rounded-xl text-xs font-semibold flex items-center gap-1.5">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                          <span>Versi Aktif Saat Ini</span>
+                        </span>
+                      ) : null}
+
+                      <button
+                        onClick={() => {
+                          setShowHistoryModal(false);
+                          setSelectedHistoryVersion(null);
+                        }}
+                        className="text-slate-400 hover:text-white p-1.5 rounded-xl hover:bg-slate-800 transition cursor-pointer"
+                      >
+                        <X className="w-5 h-5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Body: Left Table + Right Version History Sidebar */}
+                  <div className="flex-1 flex flex-col md:flex-row overflow-hidden bg-slate-100">
+                    {/* Left: Spreadsheet Preview Table with Highlighting */}
+                    <div className="flex-1 flex flex-col bg-white overflow-hidden">
+                      {/* Sub-header Legend & Diff Warning */}
+                      <div className="px-5 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-slate-600 text-[11px] uppercase tracking-wider">
+                            Warna Sorotan Pengeditan:
+                          </span>
+                          {targetVer && (
+                            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold border ${palette.pill}`}>
+                              <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: palette.dotHex }}></span>
+                              <span>{targetVer.operatorName}</span>
+                              <span className="text-[10px] font-normal opacity-80">(Bagian yang diedit diwarnai)</span>
+                            </span>
+                          )}
+                        </div>
+
+                        {diffCount > 0 && (
+                          <div className="text-[11px] font-semibold text-amber-800 bg-amber-50 px-2.5 py-1 rounded-md border border-amber-200 flex items-center gap-1">
+                            <span>💡 Pada versi ini ada <strong>{diffCount} baris</strong> yang saat ini hilang/terhapus di tabel aktif.</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Spreadsheet Table */}
+                      <div className="flex-1 overflow-auto p-4 bg-slate-50/60">
+                        {unmodifiedCount > 0 && (
+                          <div className="mb-3 p-2 bg-slate-200/80 border border-slate-300 rounded-lg text-center text-xs font-medium text-slate-600">
+                            {unmodifiedCount} baris yang tidak diubah disembunyikan
+                          </div>
+                        )}
+
+                        <div className="bg-white rounded-xl border border-slate-300 shadow-xs overflow-hidden">
+                          <table className="w-full text-left text-xs border-collapse">
+                            <thead>
+                              <tr className="bg-slate-100 text-slate-700 font-bold border-b border-slate-300 sticky top-0 z-10">
+                                <th className="p-2.5 text-center w-12 border-r border-slate-200">No</th>
+                                <th className="p-2.5 border-r border-slate-200 min-w-[260px]">Area Pengawasan Mandatory</th>
+                                <th className="p-2.5 border-r border-slate-200 min-w-[220px]">Dasar Hukum Regulasi</th>
+                                <th className="p-2.5 border-r border-slate-200 w-36">Bentuk Pengawasan</th>
+                                <th className="p-2.5 border-r border-slate-200 text-center w-24">Mandays</th>
+                                <th className="p-2.5 min-w-[200px]">Keterangan</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-200 font-normal">
+                              {displayedItems.length === 0 ? (
+                                <tr>
+                                  <td colSpan={6} className="p-8 text-center text-slate-400">
+                                    Tidak ada data untuk ditampilkan.
+                                  </td>
+                                </tr>
+                              ) : (
+                                displayedItems.map((item, idx) => {
+                                  const bItem = baselineItems.find(b => 
+                                    (b.id && item.id && b.id === item.id) || 
+                                    (b.areaPengawasan && item.areaPengawasan && b.areaPengawasan.trim().toLowerCase() === item.areaPengawasan.trim().toLowerCase())
+                                  );
+
+                                  const isNewRow = !bItem;
+                                  const isAreaDiff = isNewRow || (bItem && item.areaPengawasan?.trim() !== bItem.areaPengawasan?.trim());
+                                  const isDasarDiff = isNewRow || (bItem && item.dasarHukum?.trim() !== bItem.dasarHukum?.trim());
+                                  const isJenisDiff = isNewRow || (bItem && item.jenisPengawasan?.trim() !== bItem.jenisPengawasan?.trim());
+                                  const isMandaysDiff = isNewRow || (bItem && Number(item.alokasiMandays) !== Number(bItem.alokasiMandays));
+                                  const isKetDiff = isNewRow || (bItem && (item.keterangan || '').trim() !== (bItem.keterangan || '').trim());
+                                  const isMissingNow = !data.some(d => d.areaPengawasan?.trim().toLowerCase() === item.areaPengawasan?.trim().toLowerCase());
+
+                                  return (
+                                    <tr
+                                      key={item.id || idx}
+                                      className={`transition ${
+                                        isMissingNow
+                                          ? 'bg-amber-50/70 hover:bg-amber-100/60'
+                                          : 'hover:bg-slate-50/90'
+                                      }`}
+                                    >
+                                      {/* No Column */}
+                                      <td className="p-2.5 text-center text-slate-500 font-medium border-r border-slate-200 bg-slate-50/50">
+                                        <div className="flex flex-col items-center gap-0.5">
+                                          <span>{item.no || idx + 1}</span>
+                                          {isNewRow && highlightChanges && (
+                                            <span className="px-1 py-0.2 bg-purple-600 text-white rounded text-[8px] font-black uppercase">
+                                              Baru
+                                            </span>
+                                          )}
+                                        </div>
+                                      </td>
+
+                                      {/* Area Pengawasan */}
+                                      <td
+                                        className={`p-2.5 border-r border-slate-200 transition-colors ${
+                                          highlightChanges && isAreaDiff
+                                            ? `${palette.cellBg} ${palette.cellText} ${palette.cellBorder}`
+                                            : 'text-slate-900 font-bold'
+                                        }`}
+                                        title={
+                                          isNewRow
+                                            ? `Ditambahkan oleh ${targetVer?.operatorName || 'Operator'}`
+                                            : bItem && isAreaDiff
+                                            ? `Diedit oleh ${targetVer?.operatorName}. Nilai sebelumnya: "${bItem.areaPengawasan}"`
+                                            : undefined
+                                        }
+                                      >
+                                        <div className="flex items-start gap-1.5">
+                                          {isMissingNow && (
+                                            <span className="px-1.5 py-0.5 bg-amber-200 text-amber-900 rounded text-[9px] font-black uppercase shrink-0 mt-0.5">
+                                              Hilang Sekarang
+                                            </span>
+                                          )}
+                                          <span>{item.areaPengawasan}</span>
+                                        </div>
+                                      </td>
+
+                                      {/* Dasar Hukum */}
+                                      <td
+                                        className={`p-2.5 border-r border-slate-200 transition-colors text-xs ${
+                                          highlightChanges && isDasarDiff
+                                            ? `${palette.cellBg} ${palette.cellText} ${palette.cellBorder}`
+                                            : 'text-slate-600 italic'
+                                        }`}
+                                        title={
+                                          bItem && isDasarDiff
+                                            ? `Diedit oleh ${targetVer?.operatorName}. Nilai sebelumnya: "${bItem.dasarHukum}"`
+                                            : undefined
+                                        }
+                                      >
+                                        {item.dasarHukum || '-'}
+                                      </td>
+
+                                      {/* Bentuk Pengawasan */}
+                                      <td
+                                        className={`p-2.5 border-r border-slate-200 transition-colors ${
+                                          highlightChanges && isJenisDiff
+                                            ? `${palette.cellBg} ${palette.cellText} ${palette.cellBorder}`
+                                            : ''
+                                        }`}
+                                        title={
+                                          bItem && isJenisDiff
+                                            ? `Diedit oleh ${targetVer?.operatorName}. Nilai sebelumnya: "${bItem.jenisPengawasan}"`
+                                            : undefined
+                                        }
+                                      >
+                                        <span className={`px-2 py-0.5 rounded text-[11px] font-semibold border ${
+                                          item.jenisPengawasan === 'Monitoring'
+                                            ? 'bg-blue-100 text-blue-900 border-blue-200'
+                                            : 'bg-slate-100 text-slate-700 border-slate-200'
+                                        }`}>
+                                          {item.jenisPengawasan}
+                                        </span>
+                                      </td>
+
+                                      {/* Mandays */}
+                                      <td
+                                        className={`p-2.5 border-r border-slate-200 text-center font-bold transition-colors ${
+                                          highlightChanges && isMandaysDiff
+                                            ? `${palette.cellBg} ${palette.cellText} ${palette.cellBorder}`
+                                            : 'text-red-900'
+                                        }`}
+                                        title={
+                                          bItem && isMandaysDiff
+                                            ? `Diedit oleh ${targetVer?.operatorName}. Nilai sebelumnya: ${bItem.alokasiMandays} Hari`
+                                            : undefined
+                                        }
+                                      >
+                                        {item.alokasiMandays} Hari
+                                      </td>
+
+                                      {/* Keterangan */}
+                                      <td
+                                        className={`p-2.5 transition-colors text-xs ${
+                                          highlightChanges && isKetDiff
+                                            ? `${palette.cellBg} ${palette.cellText} ${palette.cellBorder}`
+                                            : 'text-slate-600'
+                                        }`}
+                                        title={
+                                          bItem && isKetDiff
+                                            ? `Diedit oleh ${targetVer?.operatorName}. Nilai sebelumnya: "${bItem.keterangan || '-'}"`
+                                            : undefined
+                                        }
+                                      >
+                                        {item.keterangan || '-'}
+                                      </td>
+                                    </tr>
+                                  );
+                                })
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Right: Version History Sidebar (Exactly like Google Sheets) */}
+                    <div className="w-full md:w-80 lg:w-96 border-l border-slate-200 bg-white flex flex-col shrink-0 overflow-hidden">
+                      {/* Sidebar Header */}
+                      <div className="p-4 border-b border-slate-200 bg-white flex items-center justify-between">
+                        <div>
+                          <h4 className="font-bold text-sm text-slate-900">Riwayat Versi</h4>
+                          <p className="text-[11px] text-slate-500">Version history seperti spreadsheet</p>
+                        </div>
+                        <span className="text-[11px] font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full border border-slate-200">
+                          {historyVersions.length} versi
+                        </span>
+                      </div>
+
+                      {/* Versions List */}
+                      <div className="flex-1 overflow-y-auto p-3 space-y-2 bg-slate-50/50">
+                        {historyVersions.length === 0 ? (
+                          <div className="p-8 text-center text-slate-400 space-y-2">
+                            <Clock className="w-8 h-8 mx-auto text-slate-300" />
+                            <p className="text-xs font-medium">Belum ada riwayat tercatat.</p>
+                            <p className="text-[11px] text-slate-400">
+                              Riwayat otomatis terisi saat data ditambah, diubah, atau dihapus.
+                            </p>
+                          </div>
+                        ) : (
+                          historyVersions.map((v, idx) => {
+                            const isSelected = targetVer && targetVer.id === v.id;
+                            const isLatest = idx === 0;
+                            const vPalette = getOperatorPalette(v.operatorName);
+
+                            return (
+                              <div
+                                key={v.id}
+                                onClick={() => setSelectedHistoryVersion(v)}
+                                className={`p-3.5 rounded-2xl cursor-pointer transition border text-left space-y-1.5 ${
+                                  isSelected
+                                    ? 'bg-white border-purple-500 shadow-md ring-2 ring-purple-400/40'
+                                    : 'bg-white border-slate-200 hover:bg-slate-100/80 hover:border-slate-300'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between gap-1">
+                                  <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                                    <Clock className="w-3.5 h-3.5 text-slate-400" />
+                                    <span>{v.formattedTime}</span>
+                                  </span>
+                                  {isLatest && (
+                                    <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded-md text-[9px] font-black uppercase tracking-wider">
+                                      Versi Saat Ini
+                                    </span>
+                                  )}
+                                </div>
+
+                                <div className="flex items-center gap-2 pt-0.5">
+                                  <span
+                                    className="w-2.5 h-2.5 rounded-full shrink-0 shadow-xs"
+                                    style={{ backgroundColor: vPalette.dotHex }}
+                                  />
+                                  <span className="text-xs font-bold text-slate-800 truncate">
+                                    {v.operatorName}
+                                  </span>
+                                </div>
+
+                                <div className="flex items-center justify-between text-[11px] text-slate-500 pt-1 border-t border-slate-100">
+                                  <span className="text-slate-600 font-medium">
+                                    {v.itemCount} objek • {v.totalMandays} mandays
+                                  </span>
+                                  <span className="text-[10px] text-purple-700 font-semibold truncate max-w-[120px]" title={v.actionDescription}>
+                                    {v.actionDescription}
+                                  </span>
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+
+                      {/* Sidebar Footer: Highlight Changes Checkboxes (Matching Google Sheets Reference) */}
+                      <div className="p-4 bg-white border-t border-slate-200 space-y-2.5 shrink-0 shadow-xs">
+                        <label className="flex items-center gap-2.5 cursor-pointer select-none text-xs font-bold text-slate-800 hover:text-purple-900">
+                          <input
+                            type="checkbox"
+                            checked={highlightChanges}
+                            onChange={e => setHighlightChanges(e.target.checked)}
+                            className="w-4 h-4 rounded text-purple-600 focus:ring-purple-500 accent-purple-600 cursor-pointer"
+                          />
+                          <span>Sorot perubahan (Highlight changes)</span>
+                        </label>
+
+                        <label className="flex items-center gap-2.5 cursor-pointer select-none text-xs text-slate-600 hover:text-slate-900">
+                          <input
+                            type="checkbox"
+                            checked={showOnlyModifiedRows}
+                            onChange={e => setShowOnlyModifiedRows(e.target.checked)}
+                            className="w-4 h-4 rounded text-purple-600 focus:ring-purple-500 accent-purple-600 cursor-pointer"
+                          />
+                          <span>Hanya tampilkan baris yang diedit</span>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         </div>
       )}
