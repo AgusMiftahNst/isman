@@ -13,6 +13,7 @@ import { UsulanPrioritasPengawasanView } from './UsulanPrioritasPengawasanView';
 import { AreaPengawasanMandatoryView } from './AreaPengawasanMandatoryView';
 import { AreaTidakMasukPKPTView } from './AreaTidakMasukPKPTView';
 import { FormatPKPTBerbasisRisikoView } from './FormatPKPTBerbasisRisikoView';
+import { DeviceRegistrationModal } from '../common/DeviceRegistrationModal';
 import { 
   FileText, 
   Layers, 
@@ -134,6 +135,7 @@ export const PPBRMasterContainer: React.FC<PPBRMasterContainerProps> = ({
 
   return (
     <div className="w-full">
+      <DeviceRegistrationModal />
       {renderContent()}
     </div>
   );
