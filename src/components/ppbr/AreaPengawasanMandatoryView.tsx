@@ -26,8 +26,25 @@ import {
   Copy,
   CheckCircle2,
   Check,
-  Sparkles
+  Sparkles,
+  Clock,
+  History,
+  UserCheck,
+  Laptop,
+  Lock
 } from 'lucide-react';
+import { getDeviceOperatorName, DeviceOperatorBadge } from '../common/DeviceRegistrationModal';
+
+export interface AreaMandatoryVersion {
+  id: string;
+  timestamp: string;
+  formattedTime: string;
+  operatorName: string;
+  itemCount: number;
+  totalMandays: number;
+  items: AreaMandatoryItem[];
+  actionDescription: string;
+}
 
 export const DEFAULT_BENTUK_PENGAWASAN_MANDATORY = [
   'Reviu',
@@ -193,6 +210,20 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
   const [showEditModal, setShowEditModal] = useState(false);
   const [showStorageModal, setShowStorageModal] = useState(false);
   const [editingItem, setEditingItem] = useState<AreaMandatoryItem | null>(null);
+
+  // Version History states (Admin only)
+  const [historyVersions, setHistoryVersions] = useState<AreaMandatoryVersion[]>(() => {
+    try {
+      const saved = localStorage.getItem(storageKey + '_history');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (_) {}
+    return [];
+  });
+  const [showHistoryModal, setShowHistoryModal] = useState<boolean>(false);
+  const [selectedHistoryVersion, setSelectedHistoryVersion] = useState<AreaMandatoryVersion | null>(null);
 
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
@@ -374,12 +405,20 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
             return merged;
           });
         }
+        // Sinkronisasi riwayat versi dari Cloud
+        if (snapData && Array.isArray(snapData.historyVersions) && snapData.historyVersions.length > 0) {
+          setHistoryVersions(snapData.historyVersions);
+          try {
+            localStorage.setItem(storageKey + '_history', JSON.stringify(snapData.historyVersions));
+          } catch (_) {}
+        }
       } else {
         // If not in Firestore yet and local has data, initialize in Firestore
         if (data.length > 0) {
           setDoc(docRef, {
             items: data,
             customOptions: customBentukList,
+            historyVersions: historyVersions,
             updatedAt: new Date().toISOString(),
             title: `Area Pengawasan Mandatory (${currentYear})`
           }, { merge: true }).catch(err => {
@@ -400,8 +439,8 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
     };
   }, [docId, storageKey, currentYear]);
 
-  // Dual Persistence: Save to local state + localStorage + Firestore Cloud
-  const handleSaveData = (newData: AreaMandatoryItem[], immediateCloud = false) => {
+  // Dual Persistence: Save to local state + localStorage + Firestore Cloud + History Version
+  const handleSaveData = (newData: AreaMandatoryItem[], immediateCloud = false, actionNote?: string) => {
     setData(newData);
     localStorage.setItem(storageKey, JSON.stringify(newData));
     window.dispatchEvent(new Event('ppbr_data_updated'));
@@ -409,6 +448,34 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
       localStorage.setItem('ppbr_area_mandatory_local_backup', JSON.stringify(newData));
       setLocalBackupData(newData);
     }
+
+    // Catat Snapshot Riwayat Versi
+    const currentOp = getDeviceOperatorName();
+    const now = new Date();
+    const note = actionNote || (
+      newData.length > data.length
+        ? `Menambah data (+${newData.length - data.length} baris)`
+        : newData.length < data.length
+        ? `Menghapus data (-${data.length - newData.length} baris)`
+        : `Pembaruan data (${newData.length} objek)`
+    );
+
+    const newVersion: AreaMandatoryVersion = {
+      id: `v-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      timestamp: now.toISOString(),
+      formattedTime: now.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) + ', ' + now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+      operatorName: currentOp,
+      itemCount: newData.length,
+      totalMandays: newData.reduce((acc, c) => acc + (Number(c.alokasiMandays) || 0), 0),
+      items: newData,
+      actionDescription: note
+    };
+
+    const updatedHistory = [newVersion, ...historyVersions.filter(v => v.id !== newVersion.id)].slice(0, 50);
+    setHistoryVersions(updatedHistory);
+    try {
+      localStorage.setItem(storageKey + '_history', JSON.stringify(updatedHistory));
+    } catch (_) {}
 
     // If update originated from remote snapshot, do not re-emit to cloud
     if (isRemoteUpdateRef.current) return;
@@ -424,6 +491,7 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
         await setDoc(doc(db, 'ppbr_data', docId), {
           items: newData,
           customOptions: customBentukList,
+          historyVersions: updatedHistory,
           updatedAt: nowIso,
           title: `Area Pengawasan Mandatory (${currentYear})`
         }, { merge: true });
@@ -440,6 +508,23 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
     } else {
       saveTimeoutRef.current = setTimeout(doCloudSave, 600);
     }
+  };
+
+  // Handler memulihkan versi data riwayat ke tabel utama
+  const handleRestoreVersion = (version: AreaMandatoryVersion) => {
+    setConfirmModal({
+      isOpen: true,
+      title: 'Pulihkan Versi Riwayat Ini?',
+      message: `Apakah Anda yakin ingin memulihkan tabel ke versi tanggal ${version.formattedTime} oleh ${version.operatorName}?`,
+      detail: `Tabel akan digantikan dengan ${version.itemCount} objek penugasan (${version.totalMandays} mandays) dari versi ini. Aksi pemulihan ini juga akan dicatat ke dalam riwayat versi.`,
+      confirmText: 'Ya, Pulihkan Versi Ini',
+      variant: 'info',
+      onConfirm: () => {
+        handleSaveData(version.items, true, `Dipulihkan dari versi ${version.formattedTime} (${version.operatorName})`);
+        setShowHistoryModal(false);
+        setSelectedHistoryVersion(null);
+      }
+    });
   };
 
   // Manual Trigger: Pull latest data or Push current data to Firestore
@@ -783,6 +868,9 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
                   </>
                 )}
               </div>
+
+              {/* Registered Device Badge */}
+              <DeviceOperatorBadge />
             </div>
 
             <h1 className="text-2xl font-black tracking-tight text-white flex items-center gap-2">
@@ -795,6 +883,26 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {/* Riwayat Versi Button (Khusus Admin) */}
+            {isAdmin && (
+              <button
+                onClick={() => {
+                  setSelectedHistoryVersion(historyVersions[0] || null);
+                  setShowHistoryModal(true);
+                }}
+                className="px-3.5 py-2 bg-slate-900/90 hover:bg-slate-900 text-amber-300 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition border border-amber-400/40"
+                title="Buka Riwayat Versi & Audit Trail Pengisian (Khusus Administrator)"
+              >
+                <History className="w-3.5 h-3.5 text-amber-400" />
+                <span>Riwayat Versi</span>
+                {historyVersions.length > 0 && (
+                  <span className="px-1.5 py-0.2 bg-amber-400/20 text-amber-300 rounded-full text-[10px]">
+                    {historyVersions.length}
+                  </span>
+                )}
+              </button>
+            )}
+
             {/* Manual Sync / Refresh Button (Khusus Admin) */}
             {isAdmin && (
               <button
@@ -943,6 +1051,25 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
         </div>
 
         <div className="flex flex-wrap items-center gap-2 w-full md:w-auto justify-end">
+          {isAdmin && (
+            <button
+              onClick={() => {
+                setSelectedHistoryVersion(historyVersions[0] || null);
+                setShowHistoryModal(true);
+              }}
+              className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-amber-300 border border-slate-700 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition"
+              title="Buka Riwayat Versi & Audit Trail Pengisian (Khusus Administrator)"
+            >
+              <History className="w-3.5 h-3.5 text-amber-400" />
+              <span>Riwayat Versi</span>
+              {historyVersions.length > 0 && (
+                <span className="px-1.5 py-0.2 bg-amber-400/20 text-amber-300 rounded-full text-[10px]">
+                  {historyVersions.length}
+                </span>
+              )}
+            </button>
+          )}
+
           <button
             onClick={handleOpenAddModal}
             className="px-3.5 py-2 bg-red-600 hover:bg-red-500 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition"
@@ -1772,6 +1899,241 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Version History & Audit Trail Modal (Admin Only) */}
+      {isAdmin && showHistoryModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-3 md:p-6 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-5xl w-full max-h-[92vh] flex flex-col border border-slate-200 overflow-hidden">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-slate-900 text-white">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-amber-500/20 text-amber-400 rounded-2xl border border-amber-500/30">
+                  <History className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-bold text-base text-white">
+                      Riwayat Versi & Audit Trail
+                    </h3>
+                    <span className="px-2 py-0.5 bg-amber-500/20 text-amber-300 rounded-full text-[10px] font-bold uppercase tracking-wider border border-amber-400/30">
+                      Khusus Administrator
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-300">
+                    Menu 12: Area Pengawasan Mandatory ({currentYear}) — Rekam jejak pengisian & pemulihan data terhapus
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setShowHistoryModal(false);
+                  setSelectedHistoryVersion(null);
+                }}
+                className="text-slate-400 hover:text-white p-1.5 rounded-xl hover:bg-slate-800 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body: 2 Columns */}
+            <div className="flex-1 flex flex-col md:flex-row overflow-hidden min-h-[440px]">
+              {/* Left Column: List of versions */}
+              <div className="w-full md:w-80 border-r border-slate-200 flex flex-col bg-slate-50/70 shrink-0">
+                <div className="p-3 border-b border-slate-200 bg-white flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-700">Daftar Versi Waktu</span>
+                  <span className="text-[11px] font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
+                    {historyVersions.length} Rekaman
+                  </span>
+                </div>
+
+                <div className="flex-1 overflow-y-auto divide-y divide-slate-200 p-2 space-y-1.5">
+                  {historyVersions.length === 0 ? (
+                    <div className="p-8 text-center text-slate-400 space-y-2">
+                      <Clock className="w-8 h-8 mx-auto text-slate-300" />
+                      <p className="text-xs font-medium">Belum ada riwayat tercatat.</p>
+                      <p className="text-[11px] text-slate-400">
+                        Riwayat akan otomatis terisi saat data di tabel ini ditambah, diubah, atau dihapus.
+                      </p>
+                    </div>
+                  ) : (
+                    historyVersions.map((v, idx) => {
+                      const isSelected = selectedHistoryVersion ? selectedHistoryVersion.id === v.id : idx === 0;
+                      const isLatest = idx === 0;
+                      return (
+                        <div
+                          key={v.id}
+                          onClick={() => setSelectedHistoryVersion(v)}
+                          className={`p-3 rounded-2xl cursor-pointer transition border text-left space-y-1.5 ${
+                            isSelected
+                              ? 'bg-amber-50/90 border-amber-400 shadow-xs ring-1 ring-amber-300'
+                              : 'bg-white border-slate-200 hover:bg-slate-100/70 hover:border-slate-300'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-1">
+                            <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                              <Clock className="w-3 h-3 text-slate-400" />
+                              <span>{v.formattedTime}</span>
+                            </span>
+                            {isLatest && (
+                              <span className="px-1.5 py-0.5 bg-emerald-100 text-emerald-800 rounded-md text-[9px] font-bold">
+                                Aktif
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-1 text-[11px] text-slate-700 font-medium">
+                            <Laptop className="w-3 h-3 text-teal-600 shrink-0" />
+                            <span className="truncate">Oleh: <strong>{v.operatorName}</strong></span>
+                          </div>
+
+                          <div className="flex items-center justify-between text-[11px] text-slate-500 pt-0.5">
+                            <span>{v.itemCount} objek • {v.totalMandays} mandays</span>
+                            <span className="text-[10px] text-amber-800 font-semibold truncate max-w-[110px]" title={v.actionDescription}>
+                              {v.actionDescription}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+
+              {/* Right Column: Version Details & Preview Table */}
+              <div className="flex-1 flex flex-col bg-white overflow-hidden">
+                {(() => {
+                  const targetVer = selectedHistoryVersion || historyVersions[0];
+                  if (!targetVer) {
+                    return (
+                      <div className="flex-1 flex items-center justify-center p-8 text-center text-slate-400">
+                        <div className="space-y-2">
+                          <History className="w-10 h-10 mx-auto text-slate-300" />
+                          <h4 className="font-bold text-sm text-slate-700">Pilih salah satu versi di sebelah kiri</h4>
+                          <p className="text-xs text-slate-400 max-w-sm">
+                            Anda dapat melihat isi tabel pada tanggal dan jam tersebut, serta memulihkan data jika terhapus.
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  const isCurrentActive = targetVer.id === historyVersions[0]?.id;
+                  const diffCount = targetVer.itemCount - data.length;
+
+                  return (
+                    <div className="flex-1 flex flex-col overflow-hidden">
+                      {/* Top Action Bar */}
+                      <div className="p-4 bg-slate-50 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h4 className="font-bold text-sm text-slate-900">
+                              Versi: {targetVer.formattedTime}
+                            </h4>
+                            <span className="px-2 py-0.5 bg-blue-100 text-blue-900 rounded-md text-[10px] font-bold">
+                              {targetVer.itemCount} Objek ({targetVer.totalMandays} Mandays)
+                            </span>
+                          </div>
+                          <div className="text-xs text-slate-600 mt-0.5 flex flex-wrap items-center gap-1.5">
+                            <span>Disimpan oleh pemegang laptop:</span>
+                            <span className="font-bold text-teal-800 bg-teal-50 px-2 py-0.5 rounded border border-teal-200 inline-flex items-center gap-1">
+                              <Laptop className="w-3 h-3 text-teal-600" />
+                              {targetVer.operatorName}
+                            </span>
+                            <span className="text-slate-400">•</span>
+                            <span className="italic text-slate-500">{targetVer.actionDescription}</span>
+                          </div>
+                        </div>
+
+                        {/* Restore Button */}
+                        <div className="flex items-center gap-2 shrink-0">
+                          {!isCurrentActive ? (
+                            <button
+                              onClick={() => handleRestoreVersion(targetVer)}
+                              className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-xl flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+                              title="Kembalikan tabel aktif saat ini ke data pada versi ini"
+                            >
+                              <RotateCcw className="w-4 h-4" />
+                              <span>Pulihkan Versi Ini (Restore)</span>
+                            </button>
+                          ) : (
+                            <span className="px-3 py-1.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-semibold flex items-center gap-1">
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                              <span>Versi Aktif Saat Ini</span>
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Diff Warning Bar if data was deleted in current version */}
+                      {diffCount > 0 && (
+                        <div className="bg-amber-500/15 border-b border-amber-300/60 px-4 py-2 text-xs text-amber-950 flex items-center justify-between">
+                          <span className="font-medium">
+                            💡 Pada versi ini terdapat <strong>{diffCount} baris lebih banyak</strong> dibandingkan data tabel Anda saat ini.
+                          </span>
+                          <span className="text-[11px] font-bold text-amber-800">
+                            Bisa dipulihkan dengan tombol di atas
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Preview Table */}
+                      <div className="flex-1 overflow-auto p-4">
+                        <table className="w-full text-left text-xs border-collapse">
+                          <thead>
+                            <tr className="bg-slate-100 text-slate-700 sticky top-0 border-b border-slate-200">
+                              <th className="p-2.5 text-center w-10">No</th>
+                              <th className="p-2.5">Area Pengawasan Mandatory</th>
+                              <th className="p-2.5">Dasar Hukum Regulasi</th>
+                              <th className="p-2.5">Bentuk Pengawasan</th>
+                              <th className="p-2.5 text-center w-24">Mandays</th>
+                              <th className="p-2.5">Keterangan</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {targetVer.items.map((item, idx) => {
+                              const isMissingNow = !data.some(d => d.areaPengawasan?.trim().toLowerCase() === item.areaPengawasan?.trim().toLowerCase());
+                              return (
+                                <tr
+                                  key={item.id || idx}
+                                  className={`transition ${
+                                    isMissingNow
+                                      ? 'bg-amber-50/70 hover:bg-amber-100/70'
+                                      : 'hover:bg-slate-50'
+                                  }`}
+                                >
+                                  <td className="p-2.5 text-center text-slate-500 font-medium">{item.no || idx + 1}</td>
+                                  <td className="p-2.5 font-bold text-slate-800">
+                                    <div className="flex items-center gap-1.5">
+                                      {isMissingNow && (
+                                        <span className="px-1.5 py-0.2 bg-amber-200 text-amber-900 rounded text-[9px] font-bold uppercase">
+                                          Hilang Sekarang
+                                        </span>
+                                      )}
+                                      <span>{item.areaPengawasan}</span>
+                                    </div>
+                                  </td>
+                                  <td className="p-2.5 text-slate-600 text-[11px] italic">{item.dasarHukum}</td>
+                                  <td className="p-2.5">
+                                    <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded text-[10px] font-semibold border border-slate-200">
+                                      {item.jenisPengawasan}
+                                    </span>
+                                  </td>
+                                  <td className="p-2.5 text-center font-bold text-red-900">{item.alokasiMandays} Hari</td>
+                                  <td className="p-2.5 text-slate-500 text-[11px]">{item.keterangan}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
           </div>
         </div>
       )}
