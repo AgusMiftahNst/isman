@@ -70,11 +70,12 @@ export const EvaluasiRegisterRisikoView: React.FC<EvaluasiRegisterRisikoViewProp
       const saved = localStorage.getItem('isman_user');
       if (saved) {
         const u = JSON.parse(saved);
-        if (u.role === 'Operator') return false;
-        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.username?.toLowerCase() === 'admin';
+        const name = (u.username || '').toLowerCase();
+        const role = (u.role || '').toLowerCase();
+        return name === 'admin' || role === 'administrator' || role === 'admin';
       }
     } catch (_) {}
-    return true;
+    return false;
   })();
 
   // Cloud Real-time Synchronization States
@@ -1038,15 +1039,17 @@ export const EvaluasiRegisterRisikoView: React.FC<EvaluasiRegisterRisikoViewProp
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            {/* Tombol Sinkronisasi dari Risiko Strategis OPD */}
-            <button
-              onClick={scanAndPrepareSync}
-              className="px-4 py-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-extrabold rounded-xl text-xs flex items-center gap-2 shadow-lg transition active:scale-95 border border-amber-300/40"
-              title="Tarik data otomatis dari Risiko Strategis OPD (Menu 1, 2, 4, dan 5 RSO)"
-            >
-              <RefreshCw className="w-3.5 h-3.5 text-slate-950" />
-              <span>Sinkronisasi RSO OPD</span>
-            </button>
+            {/* Tombol Sinkronisasi dari Risiko Strategis OPD (Khusus Admin) */}
+            {isAdmin && (
+              <button
+                onClick={scanAndPrepareSync}
+                className="px-4 py-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-extrabold rounded-xl text-xs flex items-center gap-2 shadow-lg transition active:scale-95 border border-amber-300/40"
+                title="Tarik data otomatis dari Risiko Strategis OPD (Menu 1, 2, 4, dan 5 RSO)"
+              >
+                <RefreshCw className="w-3.5 h-3.5 text-slate-950" />
+                <span>Sinkronisasi RSO OPD</span>
+              </button>
+            )}
 
             <button
               onClick={() => setShowGuide(!showGuide)}
@@ -1255,13 +1258,15 @@ export const EvaluasiRegisterRisikoView: React.FC<EvaluasiRegisterRisikoViewProp
                         </p>
                       </div>
                       <div className="flex items-center justify-center gap-2 pt-2">
-                        <button
-                          onClick={scanAndPrepareSync}
-                          className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 shadow-sm transition"
-                        >
-                          <RefreshCw className="w-3.5 h-3.5" />
-                          Sinkronisasi dari RSO OPD
-                        </button>
+                        {isAdmin && (
+                          <button
+                            onClick={scanAndPrepareSync}
+                            className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 shadow-sm transition"
+                          >
+                            <RefreshCw className="w-3.5 h-3.5" />
+                            Sinkronisasi dari RSO OPD
+                          </button>
+                        )}
                         <button
                           onClick={handleAddRow}
                           className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-semibold inline-flex items-center gap-1.5 transition"
