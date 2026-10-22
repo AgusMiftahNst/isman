@@ -513,11 +513,12 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
       const saved = localStorage.getItem('isman_user');
       if (saved) {
         const u = JSON.parse(saved);
-        if (u.role === 'Operator') return false;
-        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.username?.toLowerCase() === 'admin';
+        const name = (u.username || '').toLowerCase();
+        const role = (u.role || '').toLowerCase();
+        return name === 'admin' || role === 'administrator' || role === 'admin';
       }
     } catch (_) {}
-    return true; // Default to true in standalone PPBR mode so user can access cleanup tools
+    return false;
   })();
 
   const [data, setData] = useState<AuditUniverseItem[]>(() => {
