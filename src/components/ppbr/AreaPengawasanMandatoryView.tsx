@@ -204,21 +204,17 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
   const storageKey = getScopedKey('ppbr_area_mandatory', currentYear);
   const docId = getScopedPPBRDocId('area_mandatory', currentYear);
 
-  const isAdmin = (() => {
+  const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
     try {
       const saved = localStorage.getItem('isman_user');
       if (saved) {
         const u = JSON.parse(saved);
         const name = (u.username || '').toLowerCase();
         const role = (u.role || '').toLowerCase();
-        if (name === 'admin' || role === 'administrator' || name.includes('inspektorat') || role.includes('inspektorat')) {
-          return true;
-        }
-        if (u.role === 'Operator') return false;
-        return true;
+        return name === 'admin' || role === 'administrator' || role === 'admin';
       }
     } catch (_) {}
-    return true;
+    return false;
   })();
 
   // Main data state loaded from localStorage initially
@@ -993,12 +989,7 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
               title="Buka Riwayat Versi & Audit Trail Pengisian (Lihat data yang terhapus/diedit & pulihkan)"
             >
               <History className="w-4 h-4 text-slate-950" />
-              <span>🕒 Riwayat Versi</span>
-              {historyVersions.length > 0 && (
-                <span className="px-1.5 py-0.5 bg-slate-950 text-amber-300 rounded-full text-[10px] font-bold">
-                  {historyVersions.length}
-                </span>
-              )}
+              <span>Riwayat Versi</span>
             </button>
 
             {/* Manual Sync / Refresh Button (Khusus Admin) */}
@@ -1159,12 +1150,7 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
             title="Buka Riwayat Versi & Audit Trail Pengisian (Lihat data yang terhapus/diedit & pulihkan)"
           >
             <History className="w-3.5 h-3.5 text-slate-950" />
-            <span>🕒 Riwayat Versi</span>
-            {historyVersions.length > 0 && (
-              <span className="px-1.5 py-0.5 bg-slate-950 text-amber-300 rounded-full text-[10px] font-bold">
-                {historyVersions.length}
-              </span>
-            )}
+            <span>Riwayat Versi</span>
           </button>
 
           <button
