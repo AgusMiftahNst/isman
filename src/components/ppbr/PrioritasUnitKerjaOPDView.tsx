@@ -52,11 +52,12 @@ export const PrioritasUnitKerjaOPDView: React.FC<PrioritasUnitKerjaOPDViewProps>
       const saved = localStorage.getItem('isman_user');
       if (saved) {
         const u = JSON.parse(saved);
-        if (u.role === 'Operator') return false;
-        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.username?.toLowerCase() === 'admin';
+        const name = (u.username || '').toLowerCase();
+        const role = (u.role || '').toLowerCase();
+        return name === 'admin' || role === 'administrator' || role === 'admin';
       }
     } catch (_) {}
-    return true;
+    return false;
   })();
 
   // Cloud Real-time Synchronization States
@@ -719,13 +720,15 @@ export const PrioritasUnitKerjaOPDView: React.FC<PrioritasUnitKerjaOPDViewProps>
               </button>
             )}
 
-            <button
-              onClick={() => setShowSyncModal(true)}
-              className="px-4 py-2 bg-gradient-to-r from-cyan-500 to-teal-500 hover:from-cyan-400 hover:to-teal-400 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-2 shadow-lg shadow-cyan-500/20 transition transform active:scale-95"
-            >
-              <RefreshCw className="w-4 h-4" />
-              <span>Sinkronisasi OPD dari Menu 1-7</span>
-            </button>
+            {isAdmin && (
+              <button
+                onClick={() => setShowSyncModal(true)}
+                className="px-4 py-2 bg-gradient-to-r from-cyan-500 to-teal-500 hover:from-cyan-400 hover:to-teal-400 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-2 shadow-lg shadow-cyan-500/20 transition transform active:scale-95"
+              >
+                <RefreshCw className="w-4 h-4" />
+                <span>Sinkronisasi OPD dari Menu 1-7</span>
+              </button>
+            )}
             <button
               onClick={() => setShowGuide(!showGuide)}
               className="px-3.5 py-2 bg-cyan-800/60 hover:bg-cyan-700/80 text-cyan-100 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition border border-cyan-700/50"
