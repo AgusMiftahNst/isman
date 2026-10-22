@@ -80,11 +80,12 @@ export const PPBRMasterContainer: React.FC<PPBRMasterContainerProps> = ({
       const saved = localStorage.getItem('isman_user');
       if (saved) {
         const u = JSON.parse(saved);
-        if (u.role === 'Operator') return false;
-        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.username?.toLowerCase() === 'admin';
+        const name = (u.username || '').toLowerCase();
+        const role = (u.role || '').toLowerCase();
+        return name === 'admin' || role === 'administrator' || role === 'admin';
       }
     } catch (_) {}
-    return true;
+    return false;
   })();
 
   const currentMenuId = onSelectSubMenu ? activeSubMenu : internalMenu;
