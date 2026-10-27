@@ -4,7 +4,7 @@ import { exportToExcel, exportToPdf } from './ppbrExport';
 import { ConfirmModal } from '../common/ConfirmModal';
 import { db } from '../../lib/firebase';
 import { doc, onSnapshot, setDoc, getDoc } from 'firebase/firestore';
-import { getScopedKey, getScopedPPBRDocId, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
+import { getScopedKey, getScopedPPBRDocId, getSelectedYear, DEFAULT_YEAR, isPPBRAdminUser } from './ppbrYearHelper';
 import {
   BookOpen,
   Plus,
@@ -47,6 +47,45 @@ export interface AreaMandatoryVersion {
   items: AreaMandatoryItem[];
   actionDescription: string;
 }
+
+export const mergeVersionHistories = (
+  v1: AreaMandatoryVersion[] = [],
+  v2: AreaMandatoryVersion[] = []
+): AreaMandatoryVersion[] => {
+  const map = new Map<string, AreaMandatoryVersion>();
+  [...v1, ...v2].forEach(ver => {
+    if (ver && ver.id) {
+      map.set(ver.id, ver);
+    }
+  });
+  return Array.from(map.values())
+    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+    .slice(0, 100);
+};
+
+export const mergeAreaMandatoryItems = (
+  local: AreaMandatoryItem[] = [],
+  remote: AreaMandatoryItem[] = []
+): AreaMandatoryItem[] => {
+  if (!remote || remote.length === 0) return local;
+  if (!local || local.length === 0) return remote;
+
+  const localMap = new Map<string, AreaMandatoryItem>();
+  local.forEach(item => {
+    const key = item.id || `no_${item.no}_${(item.areaPengawasan || '').toLowerCase().trim()}`;
+    localMap.set(key, item);
+  });
+
+  const merged = [...local];
+  remote.forEach(rem => {
+    const key = rem.id || `no_${rem.no}_${(rem.areaPengawasan || '').toLowerCase().trim()}`;
+    if (!localMap.has(key)) {
+      merged.push(rem);
+    }
+  });
+
+  return merged.sort((a, b) => (Number(a.no) || 0) - (Number(b.no) || 0) || String(a.id || '').localeCompare(String(b.id || '')));
+};
 
 export const OPERATOR_PALETTES = [
   {
@@ -204,18 +243,7 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
   const storageKey = getScopedKey('ppbr_area_mandatory', currentYear);
   const docId = getScopedPPBRDocId('area_mandatory', currentYear);
 
-  const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
-    try {
-      const saved = localStorage.getItem('isman_user');
-      if (saved) {
-        const u = JSON.parse(saved);
-        const name = (u.username || '').toLowerCase();
-        const role = (u.role || '').toLowerCase();
-        return name === 'admin' || role === 'administrator' || role === 'admin';
-      }
-    } catch (_) {}
-    return false;
-  })();
+  const isAdmin = isPPBRAdminUser() && (isAdminProp ?? true);
 
   // Main data state loaded from localStorage initially
   const [data, setData] = useState<AreaMandatoryItem[]>(() => {
@@ -266,6 +294,12 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
   const isRemoteUpdateRef = useRef(false);
   const saveTimeoutRef = useRef<any>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Reference to current data to prevent stale closure & accidental overwrite
+  const dataRef = useRef<AreaMandatoryItem[]>(data);
+  useEffect(() => {
+    dataRef.current = data;
+  }, [data]);
 
   // Modals & UI Controls
   const [searchTerm, setSearchTerm] = useState('');
@@ -464,33 +498,65 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
     setShowAddModal(true);
   };
 
-  // Real-time listener: Listen to Firestore Cloud Database updates for Area Mandatory
+  // Stable Cloud Sync (RSO/ROO Architecture): Load initial data on mount, never stomp on active rows
   useEffect(() => {
+    let isMounted = true;
     const docRef = doc(db, 'ppbr_data', docId);
-    const unsub = onSnapshot(docRef, (snap) => {
+
+    // Initial fetch from Firestore (like RSO/ROO)
+    getDoc(docRef).then((snap) => {
+      if (!isMounted) return;
       if (snap.exists()) {
         const snapData = snap.data();
-        if (snapData && Array.isArray(snapData.items)) {
-          isRemoteUpdateRef.current = true;
-          setData(snapData.items);
-          localStorage.setItem(storageKey, JSON.stringify(snapData.items));
-          window.dispatchEvent(new Event('ppbr_data_updated'));
-          if (snapData.items.length > 0 && currentYear === DEFAULT_YEAR) {
-            localStorage.setItem('ppbr_area_mandatory_local_backup', JSON.stringify(snapData.items));
-            setLocalBackupData(snapData.items);
+        if (snapData && Array.isArray(snapData.items) && snapData.items.length > 0) {
+          setData(prev => {
+            if (prev.length === 0) {
+              dataRef.current = snapData.items;
+              localStorage.setItem(storageKey, JSON.stringify(snapData.items));
+              return snapData.items;
+            }
+            // Gabungkan tanpa pernah menghapus baris lokal aktif
+            const merged = mergeAreaMandatoryItems(prev, snapData.items);
+            dataRef.current = merged;
+            localStorage.setItem(storageKey, JSON.stringify(merged));
+            return merged;
+          });
+          if (Array.isArray(snapData.historyVersions) && snapData.historyVersions.length > 0) {
+            setHistoryVersions(prev => mergeVersionHistories(prev, snapData.historyVersions));
+          }
+          if (Array.isArray(snapData.customOptions) && snapData.customOptions.length > 0) {
+            setCustomBentukList(prev => Array.from(new Set([...prev, ...snapData.customOptions])));
           }
           setCloudStatus('synced');
           if (snapData.updatedAt) {
             try {
               setLastSyncedTime(new Date(snapData.updatedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-            } catch (_) {
-              setLastSyncedTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-            }
+            } catch (_) {}
           }
-          setTimeout(() => {
-            isRemoteUpdateRef.current = false;
-          }, 300);
         }
+      } else {
+        // If not in Firestore yet and local has data, initialize in Firestore
+        if (dataRef.current.length > 0) {
+          setDoc(docRef, {
+            items: dataRef.current,
+            customOptions: customBentukList,
+            historyVersions: historyVersions,
+            updatedAt: new Date().toISOString(),
+            title: `Area Pengawasan Mandatory (${currentYear})`
+          }, { merge: true }).catch(err => {
+            console.warn('Initial push area mandatory to cloud error:', err);
+          });
+        }
+      }
+    }).catch(err => {
+      console.warn('Initial Area Mandatory getDoc warning:', err);
+    });
+
+    // Real-time listener: HANYA untuk memperbarui riwayat versi dan opsi dropdown kustom
+    // TIDAK PERNAH menimpa baris aktif saat sedang diedit (meniru kestabilan RSO/ROO)
+    const unsub = onSnapshot(docRef, (snap) => {
+      if (snap.exists()) {
+        const snapData = snap.data();
         // Sinkronisasi opsi kustom dari Cloud
         if (snapData && Array.isArray(snapData.customOptions) && snapData.customOptions.length > 0) {
           setCustomBentukList(prev => {
@@ -503,23 +569,20 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
         }
         // Sinkronisasi riwayat versi dari Cloud
         if (snapData && Array.isArray(snapData.historyVersions) && snapData.historyVersions.length > 0) {
-          setHistoryVersions(snapData.historyVersions);
-          try {
-            localStorage.setItem(storageKey + '_history', JSON.stringify(snapData.historyVersions));
-          } catch (_) {}
-        }
-      } else {
-        // If not in Firestore yet and local has data, initialize in Firestore
-        if (data.length > 0) {
-          setDoc(docRef, {
-            items: data,
-            customOptions: customBentukList,
-            historyVersions: historyVersions,
-            updatedAt: new Date().toISOString(),
-            title: `Area Pengawasan Mandatory (${currentYear})`
-          }, { merge: true }).catch(err => {
-            console.warn('Initial push area mandatory to cloud error:', err);
+          setHistoryVersions(prev => {
+            const merged = mergeVersionHistories(prev, snapData.historyVersions);
+            try {
+              localStorage.setItem(storageKey + '_history', JSON.stringify(merged));
+            } catch (_) {}
+            return merged;
           });
+        }
+        // Hanya sinkronkan data items jika tabel lokal saat ini masih kosong
+        if (snapData && Array.isArray(snapData.items) && dataRef.current.length === 0 && snapData.items.length > 0) {
+          const sortedItems = [...snapData.items].sort((a, b) => (Number(a.no) || 0) - (Number(b.no) || 0) || String(a.id || '').localeCompare(String(b.id || '')));
+          setData(sortedItems);
+          dataRef.current = sortedItems;
+          localStorage.setItem(storageKey, JSON.stringify(sortedItems));
         }
       }
     }, (err) => {
@@ -528,6 +591,7 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
     });
 
     return () => {
+      isMounted = false;
       unsub();
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
@@ -540,9 +604,13 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
     setData(newData);
     localStorage.setItem(storageKey, JSON.stringify(newData));
     window.dispatchEvent(new Event('ppbr_data_updated'));
-    if (newData.length > 0 && currentYear === DEFAULT_YEAR) {
+    // Selalu perbarui cadangan lokal agar tidak menimpa aksi penghapusan
+    if (currentYear === DEFAULT_YEAR) {
       localStorage.setItem('ppbr_area_mandatory_local_backup', JSON.stringify(newData));
       setLocalBackupData(newData);
+      if (newData.length === 0) {
+        setShowLocalRestoreBanner(false);
+      }
     }
 
     // Catat Snapshot Riwayat Versi
@@ -567,7 +635,7 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
       actionDescription: note
     };
 
-    const updatedHistory = [newVersion, ...historyVersions.filter(v => v.id !== newVersion.id)].slice(0, 50);
+    const updatedHistory = mergeVersionHistories([newVersion], historyVersions);
     setHistoryVersions(updatedHistory);
     try {
       localStorage.setItem(storageKey + '_history', JSON.stringify(updatedHistory));
@@ -584,10 +652,22 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
     const doCloudSave = async () => {
       try {
         const nowIso = new Date().toISOString();
+        let finalHistory = updatedHistory;
+        try {
+          const freshSnap = await getDoc(doc(db, 'ppbr_data', docId));
+          if (freshSnap.exists() && Array.isArray(freshSnap.data()?.historyVersions)) {
+            finalHistory = mergeVersionHistories([newVersion], freshSnap.data().historyVersions);
+            setHistoryVersions(finalHistory);
+            try {
+              localStorage.setItem(storageKey + '_history', JSON.stringify(finalHistory));
+            } catch (_) {}
+          }
+        } catch (_) {}
+
         await setDoc(doc(db, 'ppbr_data', docId), {
           items: newData,
           customOptions: customBentukList,
-          historyVersions: updatedHistory,
+          historyVersions: finalHistory,
           updatedAt: nowIso,
           title: `Area Pengawasan Mandatory (${currentYear})`
         }, { merge: true });
@@ -856,7 +936,7 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
       variant: 'danger',
       onConfirm: () => {
         const updated = data.filter(d => d.id !== item.id).map((d, idx) => ({ ...d, no: idx + 1 }));
-        handleSaveData(updated);
+        handleSaveData(updated, true, `Menghapus objek: "${item.areaPengawasan}"`);
       }
     });
   };
@@ -870,17 +950,19 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
       confirmText: 'Ya, Kosongkan Semua',
       variant: 'danger',
       onConfirm: () => {
-        handleSaveData([], true);
+        handleSaveData([], true, `Mengosongkan seluruh tabel (${data.length} objek dihapus)`);
       }
     });
   };
 
-  const filteredData = data.filter(d =>
-    (d.areaPengawasan || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (d.dasarHukum || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (d.jenisPengawasan || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (d.keterangan || '').toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredData = [...data]
+    .sort((a, b) => (Number(a.no) || 0) - (Number(b.no) || 0) || String(a.id || '').localeCompare(String(b.id || '')))
+    .filter(d =>
+      (d.areaPengawasan || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (d.dasarHukum || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (d.jenisPengawasan || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (d.keterangan || '').toLowerCase().includes(searchTerm.toLowerCase())
+    );
 
   const totalMandays = data.reduce((acc, curr) => acc + (Number(curr.alokasiMandays) || 0), 0);
 
@@ -1338,7 +1420,7 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
       </div>
 
       {/* Storage Management Modal (Input dari Storage) */}
-      {showStorageModal && (
+      {isAdmin && showStorageModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
           <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full p-6 border border-slate-200 space-y-5">
             <div className="flex items-center justify-between pb-3 border-b border-slate-200">
@@ -2065,11 +2147,6 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
                           <h3 className="font-bold text-sm md:text-base text-white">
                             {targetVer ? targetVer.formattedTime : 'Riwayat Versi'}
                           </h3>
-                          {targetVer && (
-                            <span className="px-2 py-0.5 bg-slate-800 border border-slate-700 text-slate-300 rounded-md text-[10px] font-semibold">
-                              Total: {totalEditsCount} perubahan diedit
-                            </span>
-                          )}
                         </div>
                         {targetVer && (
                           <div className="flex items-center gap-2 text-xs text-slate-300 mt-0.5">
@@ -2309,14 +2386,9 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
                     {/* Right: Version History Sidebar (Exactly like Google Sheets) */}
                     <div className="w-full md:w-80 lg:w-96 border-l border-slate-200 bg-white flex flex-col shrink-0 overflow-hidden">
                       {/* Sidebar Header */}
-                      <div className="p-4 border-b border-slate-200 bg-white flex items-center justify-between">
-                        <div>
-                          <h4 className="font-bold text-sm text-slate-900">Riwayat Versi</h4>
-                          <p className="text-[11px] text-slate-500">Version history seperti spreadsheet</p>
-                        </div>
-                        <span className="text-[11px] font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full border border-slate-200">
-                          {historyVersions.length} versi
-                        </span>
+                      <div className="p-4 border-b border-slate-200 bg-white">
+                        <h4 className="font-bold text-sm text-slate-900">Riwayat Versi</h4>
+                        <p className="text-[11px] text-slate-500">Version history seperti spreadsheet</p>
                       </div>
 
                       {/* Versions List */}
