@@ -4,7 +4,7 @@ import { doc, onSnapshot, setDoc, getDoc } from 'firebase/firestore';
 import { UsulanPrioritasPengawasanItem, PrioritasProgramRPJMDItem } from './ppbrData';
 import { exportToExcel, exportToPdf } from './ppbrExport';
 import { ConfirmModal } from '../common/ConfirmModal';
-import { getScopedKey, getScopedPPBRDocId, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
+import { getScopedKey, getScopedPPBRDocId, getSelectedYear, DEFAULT_YEAR, isPPBRAdminUser } from './ppbrYearHelper';
 import {
   Target,
   Edit3,
@@ -46,18 +46,7 @@ export const UsulanPrioritasPengawasanView: React.FC<UsulanPrioritasPengawasanVi
   const m8StorageKey = getScopedKey('ppbr_prioritas_program', currentYear);
   const docId = getScopedPPBRDocId('usulan_pengawasan', currentYear);
 
-  const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
-    try {
-      const saved = localStorage.getItem('isman_user');
-      if (saved) {
-        const u = JSON.parse(saved);
-        const name = (u.username || '').toLowerCase();
-        const role = (u.role || '').toLowerCase();
-        return name === 'admin' || role === 'administrator' || role === 'admin';
-      }
-    } catch (_) {}
-    return false;
-  })();
+  const isAdmin = isPPBRAdminUser() && (isAdminProp ?? true);
 
   // Cloud Real-time Synchronization States
   const [cloudStatus, setCloudStatus] = useState<'synced' | 'saving' | 'offline' | 'error'>('synced');
@@ -101,22 +90,6 @@ export const UsulanPrioritasPengawasanView: React.FC<UsulanPrioritasPengawasanVi
       if (snap.exists()) {
         const snapData = snap.data();
         if (snapData && Array.isArray(snapData.items)) {
-          try {
-            const localRaw = localStorage.getItem(storageKey);
-            if (localRaw) {
-              const localParsed = JSON.parse(localRaw);
-              if (Array.isArray(localParsed) && localParsed.length > snapData.items.length) {
-                console.log(`[Auto-Sync Usulan] Mempromosikan data lokal (${localParsed.length} usulan vs cloud ${snapData.items.length}) ke Cloud.`);
-                setDoc(docRef, {
-                  items: localParsed,
-                  updatedAt: new Date().toISOString(),
-                  title: `Usulan Prioritas Pengawasan ${currentYear}`
-                }, { merge: true }).catch(() => {});
-                return;
-              }
-            }
-          } catch (_) {}
-
           isRemoteUpdateRef.current = true;
           setData(snapData.items);
           setIsMenu8Filled(snapData.items.length > 0);
@@ -376,14 +349,16 @@ export const UsulanPrioritasPengawasanView: React.FC<UsulanPrioritasPengawasanVi
     setEditingItem(null);
   };
 
-  const filteredData = data.filter(d => {
-    const matchKat = filterKategori === 'all' || d.kategoriPrioritas === filterKategori;
-    const matchSearch =
-      (d.areaPengawasan || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (d.opdPengampu || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (d.jenisPengawasan || '').toLowerCase().includes(searchTerm.toLowerCase());
-    return matchKat && matchSearch;
-  });
+  const filteredData = [...data]
+    .sort((a, b) => (Number(a.no) || 0) - (Number(b.no) || 0) || String(a.id || '').localeCompare(String(b.id || '')))
+    .filter(d => {
+      const matchKat = filterKategori === 'all' || d.kategoriPrioritas === filterKategori;
+      const matchSearch =
+        (d.areaPengawasan || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (d.opdPengampu || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (d.jenisPengawasan || '').toLowerCase().includes(searchTerm.toLowerCase());
+      return matchKat && matchSearch;
+    });
 
   const totalMandays = data.reduce((acc, curr) => acc + curr.alokasiMandays, 0);
   const countTinggi = data.filter(d => d.kategoriPrioritas === 'Tinggi').length;
