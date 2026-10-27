@@ -91,3 +91,32 @@ export const isDocMatchingYear = (docData: any, year?: string): boolean => {
   }
   return docData?.year === y || docData?.tahun === y;
 };
+
+/**
+ * Helper to determine if the active session user is strictly the Master Admin.
+ * In ISMAN PPBR, only the dedicated 'admin' account (username: 'admin') has access
+ * to admin-only storage input/restore and cloud sync buttons.
+ * Accounts like 'inspektorat' or OPD users are explicitly non-admin.
+ */
+export const isPPBRAdminUser = (userObj?: any): boolean => {
+  const check = (u: any): boolean => {
+    if (!u) return false;
+    const username = String(u.username || '').toLowerCase().trim();
+    // 'inspektorat' or any non-admin account is explicitly NOT admin
+    if (username.includes('inspektorat')) return false;
+    // Only username strictly 'admin' is the master admin
+    return username === 'admin';
+  };
+
+  if (userObj) {
+    return check(userObj);
+  }
+  try {
+    const saved = localStorage.getItem('isman_user');
+    if (saved) {
+      return check(JSON.parse(saved));
+    }
+  } catch (_) {}
+  return false;
+};
+
