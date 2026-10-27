@@ -361,21 +361,41 @@ export const calculateSkorMenu8 = (
 };
 
 // 10. Pengurutan & Penetapan Ranking Menu 8
-// KDH langsung ranking paling atas (#1, #2, ...) baru kemudian skor total tertinggi, program belum lengkap diletakkan paling bawah
+// KDH langsung ranking paling atas (#1, #2, ...) baru kemudian skor total tertinggi.
+// Dilengkapi deterministik tie-breaker (Nama OPD -> Nama Program -> ID) agar urutan baris 100% stabil dan tidak berganti-ganti secara acak.
 export const sortAndRankMenu8 = (items: PrioritasProgramRPJMDItem[]): PrioritasProgramRPJMDItem[] => {
   return [...items]
     .sort((a, b) => {
+      // 1. KDH selalu di posisi paling atas
       const isKDHa = a.permintaanKDH === 'Ya' || Boolean(a.isKDH);
       const isKDHb = b.permintaanKDH === 'Ya' || Boolean(b.isKDH);
       if (isKDHa && !isKDHb) return -1;
       if (!isKDHa && isKDHb) return 1;
 
-      const hasSkorA = (a.skorTotal || 0) > 0;
-      const hasSkorB = (b.skorTotal || 0) > 0;
-      if (hasSkorA && !hasSkorB) return -1;
-      if (!hasSkorA && hasSkorB) return 1;
+      // 2. Program dengan skor (> 0) di atas yang belum dinilai (0)
+      const skorA = Number(a.skorTotal) || 0;
+      const skorB = Number(b.skorTotal) || 0;
+      if (skorA > 0 && skorB === 0) return -1;
+      if (skorA === 0 && skorB > 0) return 1;
 
-      return (b.skorTotal || 0) - (a.skorTotal || 0);
+      // 3. Selisih skor total (tertinggi ke terendah)
+      const diff = skorB - skorA;
+      if (Math.abs(diff) > 0.0001) return diff;
+
+      // 4. TIE-BREAKER 1: Nama OPD pengampu (A-Z)
+      const opdA = (a.opdPengampu || '').trim();
+      const opdB = (b.opdPengampu || '').trim();
+      const cmpOpd = opdA.localeCompare(opdB, 'id', { sensitivity: 'base' });
+      if (cmpOpd !== 0) return cmpOpd;
+
+      // 5. TIE-BREAKER 2: Nama Program (A-Z)
+      const progA = (a.program || '').trim();
+      const progB = (b.program || '').trim();
+      const cmpProg = progA.localeCompare(progB, 'id', { sensitivity: 'base' });
+      if (cmpProg !== 0) return cmpProg;
+
+      // 6. TIE-BREAKER 3: ID Unik permanen (menjamin stabilitas absolut)
+      return String(a.id || '').localeCompare(String(b.id || ''));
     })
     .map((item, idx) => {
       const hasRank = (item.skorTotal || 0) > 0 || item.permintaanKDH === 'Ya' || Boolean(item.isKDH);
@@ -470,11 +490,24 @@ export const calculateSkorMenu9 = (
 export const sortAndRankMenu9 = (items: PrioritasUnitKerjaOPDItem[]): PrioritasUnitKerjaOPDItem[] => {
   return [...items]
     .sort((a, b) => {
+      // 1. KDH selalu di posisi paling atas
       const isKDHa = a.permintaanKDH === 'Ya' || Boolean(a.isKDH);
       const isKDHb = b.permintaanKDH === 'Ya' || Boolean(b.isKDH);
       if (isKDHa && !isKDHb) return -1;
       if (!isKDHa && isKDHb) return 1;
-      return (b.skorTotal || 0) - (a.skorTotal || 0);
+
+      // 2. Selisih skor total (tertinggi ke terendah)
+      const diff = (Number(b.skorTotal) || 0) - (Number(a.skorTotal) || 0);
+      if (Math.abs(diff) > 0.0001) return diff;
+
+      // 3. TIE-BREAKER 1: Nama OPD (A-Z)
+      const opdA = (a.opd || '').trim();
+      const opdB = (b.opd || '').trim();
+      const cmpOpd = opdA.localeCompare(opdB, 'id', { sensitivity: 'base' });
+      if (cmpOpd !== 0) return cmpOpd;
+
+      // 4. TIE-BREAKER 2: ID Unik permanen
+      return String(a.id || '').localeCompare(String(b.id || ''));
     })
     .map((item, idx) => ({
       ...item,
