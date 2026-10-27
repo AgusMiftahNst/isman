@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { PrioritasProgramRPJMDItem, INITIAL_PRIORITAS_RPJMD } from './ppbrData';
 import { exportToExcel, exportToPdf } from './ppbrExport';
 import { ConfirmModal } from '../common/ConfirmModal';
-import { getScopedKey, getScopedPPBRDocId, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
+import { getScopedKey, getScopedPPBRDocId, getSelectedYear, DEFAULT_YEAR, isPPBRAdminUser } from './ppbrYearHelper';
 import { db } from '../../lib/firebase';
 import { doc, onSnapshot, setDoc, getDoc } from 'firebase/firestore';
 import {
@@ -52,18 +52,7 @@ export const PrioritasProgramRPJMDView: React.FC<PrioritasProgramRPJMDViewProps>
   const storageKey = getScopedKey('ppbr_prioritas_program', currentYear);
   const docId = getScopedPPBRDocId('prioritas_program', currentYear);
 
-  const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
-    try {
-      const saved = localStorage.getItem('isman_user');
-      if (saved) {
-        const u = JSON.parse(saved);
-        const name = (u.username || '').toLowerCase();
-        const role = (u.role || '').toLowerCase();
-        return name === 'admin' || role === 'administrator' || role === 'admin';
-      }
-    } catch (_) {}
-    return false;
-  })();
+  const isAdmin = isPPBRAdminUser() && (isAdminProp ?? true);
 
   const [data, setData] = useState<PrioritasProgramRPJMDItem[]>(() => {
     const saved = localStorage.getItem(storageKey);
@@ -96,23 +85,6 @@ export const PrioritasProgramRPJMDView: React.FC<PrioritasProgramRPJMDViewProps>
       if (snap.exists()) {
         const snapData = snap.data();
         if (snapData && Array.isArray(snapData.items)) {
-          // Cek jika laptop ini memiliki data program lokal yang lebih lengkap (misal 103 atau 100 program vs cloud)
-          try {
-            const localSaved = localStorage.getItem(storageKey);
-            if (localSaved) {
-              const localParsed = JSON.parse(localSaved);
-              if (Array.isArray(localParsed) && localParsed.length > snapData.items.length) {
-                console.log(`[Auto-Sync Menu 8] Mempromosikan data lokal (${localParsed.length} program vs cloud ${snapData.items.length}) ke Cloud.`);
-                setDoc(docRef, {
-                  items: localParsed,
-                  updatedAt: new Date().toISOString(),
-                  title: `Prioritas Program RPJMD ${currentYear}`
-                }, { merge: true }).catch(() => {});
-                return;
-              }
-            }
-          } catch (_) {}
-
           isRemoteUpdateRef.current = true;
           const ranked = sortAndRankMenu8(snapData.items);
           setData(ranked);
