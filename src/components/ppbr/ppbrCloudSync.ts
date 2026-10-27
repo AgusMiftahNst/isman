@@ -50,27 +50,6 @@ export function usePPBRGlobalSync(year: string) {
           if (snap.exists()) {
             const data = snap.data();
             if (data && Array.isArray(data.items)) {
-              // Check if local storage on this laptop has MORE items that were not pushed yet
-              try {
-                const localRaw = localStorage.getItem(storageKey);
-                if (localRaw) {
-                  const localParsed = JSON.parse(localRaw);
-                  if (
-                    Array.isArray(localParsed) &&
-                    localParsed.length > data.items.length
-                  ) {
-                    // Local has more items (e.g. 103 vs 100, or 100 vs 55 from initial seed), auto-promote to Cloud
-                    console.log(`[Auto-Sync] Mempromosikan data lokal (${localParsed.length} baris vs cloud ${data.items.length}) ke Cloud untuk ${config.title}`);
-                    setDoc(docRef, {
-                      items: localParsed,
-                      updatedAt: new Date().toISOString(),
-                      title: `${config.title} ${year}`
-                    }, { merge: true }).catch(err => console.warn('Auto-promote error:', err));
-                    return;
-                  }
-                }
-              } catch (_) {}
-
               // Save cloud data to localStorage so synchronous helpers have it immediately
               try {
                 localStorage.setItem(storageKey, JSON.stringify(data.items));
@@ -175,17 +154,6 @@ export function usePPBRDocSync<T extends { id?: string }>({
         if (snap.exists()) {
           const snapData = snap.data();
           if (snapData && Array.isArray(snapData.items)) {
-            // Check if current local state has more items than Firestore (e.g. 103 vs 100 or 100 vs 55)
-            if (data.length > snapData.items.length) {
-              console.log(`[Auto-Sync] Local memiliki lebih banyak baris (${data.length} vs ${snapData.items.length}), mempertahankan dan mengunggah ke Cloud.`);
-              setDoc(docRef, {
-                items: data,
-                updatedAt: new Date().toISOString(),
-                title: title ? `${title} ${currentYear}` : docId
-              }, { merge: true }).catch(err => console.warn('Auto-heal Cloud error:', err));
-              return;
-            }
-
             isRemoteUpdateRef.current = true;
             const remoteItems = snapData.items as T[];
             setData(remoteItems);
