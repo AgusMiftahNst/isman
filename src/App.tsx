@@ -67,7 +67,8 @@ import {
   getRiskRowsCacheKey,
   getRiskContextCacheKey,
   getScopedFinalDocId,
-  isDocMatchingYear
+  isDocMatchingYear,
+  isPPBRAdminUser
 } from './components/ppbr/ppbrYearHelper';
 
 // --- Types ---
@@ -1916,22 +1917,6 @@ export default function App() {
             )}
           </div>
           <div className="flex items-center gap-3">
-            {/* Global Shortcut Riwayat Versi (Menu 12 Mandatory) */}
-            <button
-              onClick={() => {
-                setSelectedRiskType('ppbr');
-                setActiveMenu(12);
-                setTimeout(() => {
-                  window.dispatchEvent(new CustomEvent('open_ppbr_history_modal'));
-                }, 180);
-              }}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-black bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 rounded-lg shadow-sm border border-amber-400 transition cursor-pointer active:scale-95"
-              title="Buka Riwayat Versi & Audit Trail Pengisian (Menu 12 Mandatory)"
-            >
-              <History size={14} className="text-slate-950" />
-              <span className="hidden sm:inline">🕒 Riwayat Versi</span>
-              <span className="sm:hidden">Riwayat</span>
-            </button>
 
             {/* Year Selector Dropdown */}
             <div className="flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-200">
@@ -2021,7 +2006,7 @@ service cloud.firestore {
                       setActiveMenu(num);
                     }}
                     onBackToRiskSelection={() => setSelectedRiskType(null)}
-                    isAdmin={user ? (user.role === 'Administrator' || user.role === 'Admin' || user.username?.toLowerCase() === 'admin' || user.username?.toLowerCase().includes('inspektorat') || (user.role && user.role.toLowerCase().includes('inspektorat'))) : false}
+                    isAdmin={user ? isPPBRAdminUser(user) : false}
                     year={selectedYear}
                   />
                 )
