@@ -4,7 +4,7 @@ import { doc, onSnapshot, setDoc, getDoc } from 'firebase/firestore';
 import { PrioritasUnitKerjaOPDItem, INITIAL_PRIORITAS_OPD } from './ppbrData';
 import { exportToExcel, exportToPdf } from './ppbrExport';
 import { ConfirmModal } from '../common/ConfirmModal';
-import { getScopedKey, getScopedPPBRDocId, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
+import { getScopedKey, getScopedPPBRDocId, getSelectedYear, DEFAULT_YEAR, isPPBRAdminUser } from './ppbrYearHelper';
 import {
   getAuditUniverseOPDs,
   getFaktorAnggaranMap,
@@ -47,18 +47,7 @@ export const PrioritasUnitKerjaOPDView: React.FC<PrioritasUnitKerjaOPDViewProps>
   const storageKey = getScopedKey('ppbr_prioritas_opd', currentYear);
   const docId = getScopedPPBRDocId('prioritas_opd', currentYear);
 
-  const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
-    try {
-      const saved = localStorage.getItem('isman_user');
-      if (saved) {
-        const u = JSON.parse(saved);
-        const name = (u.username || '').toLowerCase();
-        const role = (u.role || '').toLowerCase();
-        return name === 'admin' || role === 'administrator' || role === 'admin';
-      }
-    } catch (_) {}
-    return false;
-  })();
+  const isAdmin = isPPBRAdminUser() && (isAdminProp ?? true);
 
   // Cloud Real-time Synchronization States
   const [cloudStatus, setCloudStatus] = useState<'synced' | 'saving' | 'offline' | 'error'>('synced');
@@ -89,22 +78,6 @@ export const PrioritasUnitKerjaOPDView: React.FC<PrioritasUnitKerjaOPDViewProps>
       if (snap.exists()) {
         const snapData = snap.data();
         if (snapData && Array.isArray(snapData.items)) {
-          try {
-            const localRaw = localStorage.getItem(storageKey);
-            if (localRaw) {
-              const localParsed = JSON.parse(localRaw);
-              if (Array.isArray(localParsed) && localParsed.length > snapData.items.length) {
-                console.log(`[Auto-Sync OPD] Mempromosikan data lokal (${localParsed.length} OPD vs cloud ${snapData.items.length}) ke Cloud.`);
-                setDoc(docRef, {
-                  items: localParsed,
-                  updatedAt: new Date().toISOString(),
-                  title: `Prioritas Unit Kerja OPD ${currentYear}`
-                }, { merge: true }).catch(() => {});
-                return;
-              }
-            }
-          } catch (_) {}
-
           isRemoteUpdateRef.current = true;
           const ranked = sortAndRankMenu9(snapData.items);
           setData(ranked);
