@@ -4,7 +4,7 @@ import { doc, onSnapshot, setDoc, getDoc } from 'firebase/firestore';
 import { PrioritasDesaPuskesmasItem, INITIAL_PRIORITAS_DESA_PUSKESMAS } from './ppbrData';
 import { exportToExcel, exportToPdf } from './ppbrExport';
 import { ConfirmModal } from '../common/ConfirmModal';
-import { getScopedKey, getScopedPPBRDocId, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
+import { getScopedKey, getScopedPPBRDocId, getSelectedYear, DEFAULT_YEAR, isPPBRAdminUser } from './ppbrYearHelper';
 import { Landmark, Plus, Trash2, Edit3, X, Info, FileSpreadsheet, FileText, Search, Trophy, RotateCcw, Cloud, AlertCircle, RefreshCw } from 'lucide-react';
 
 export interface PrioritasDesaPuskesmasViewProps {
@@ -18,18 +18,7 @@ export const PrioritasDesaPuskesmasView: React.FC<PrioritasDesaPuskesmasViewProp
   const oldStorageKey = getScopedKey('ppbr_prioritas_desa_puskesmas', currentYear);
   const docId = getScopedPPBRDocId('prioritas_desa', currentYear);
 
-  const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
-    try {
-      const saved = localStorage.getItem('isman_user');
-      if (saved) {
-        const u = JSON.parse(saved);
-        const name = (u.username || '').toLowerCase();
-        const role = (u.role || '').toLowerCase();
-        return name === 'admin' || role === 'administrator' || role === 'admin';
-      }
-    } catch (_) {}
-    return false;
-  })();
+  const isAdmin = isPPBRAdminUser() && (isAdminProp ?? true);
 
   // Cloud Real-time Synchronization States
   const [cloudStatus, setCloudStatus] = useState<'synced' | 'saving' | 'offline' | 'error'>('synced');
@@ -49,6 +38,20 @@ export const PrioritasDesaPuskesmasView: React.FC<PrioritasDesaPuskesmasViewProp
     return currentYear === DEFAULT_YEAR ? INITIAL_PRIORITAS_DESA_PUSKESMAS : [];
   });
 
+  // Helper: Pengurutan deterministik stabil (Skor -> Kategori -> Nama Entitas -> ID)
+  // Menjamin urutan baris tidak pernah melompat/berganti-ganti secara acak
+  const stableSortDesaPuskesmas = (items: PrioritasDesaPuskesmasItem[]): PrioritasDesaPuskesmasItem[] => {
+    return [...items].sort((a, b) => {
+      const diff = (Number(b.skorTotal) || 0) - (Number(a.skorTotal) || 0);
+      if (Math.abs(diff) > 0.0001) return diff;
+      const katCmp = (a.kategori || '').localeCompare(b.kategori || '', 'id', { sensitivity: 'base' });
+      if (katCmp !== 0) return katCmp;
+      const nameCmp = (a.namaEntitas || '').localeCompare(b.namaEntitas || '', 'id', { sensitivity: 'base' });
+      if (nameCmp !== 0) return nameCmp;
+      return String(a.id || '').localeCompare(String(b.id || ''));
+    });
+  };
+
   // Firestore Real-time Listener (Semua laptop sinkron ke Cloud)
   useEffect(() => {
     const docRef = doc(db, 'ppbr_data', docId);
@@ -56,24 +59,8 @@ export const PrioritasDesaPuskesmasView: React.FC<PrioritasDesaPuskesmasViewProp
       if (snap.exists()) {
         const snapData = snap.data();
         if (snapData && Array.isArray(snapData.items)) {
-          try {
-            const localRaw = localStorage.getItem(storageKey) || localStorage.getItem(oldStorageKey);
-            if (localRaw) {
-              const localParsed = JSON.parse(localRaw);
-              if (Array.isArray(localParsed) && localParsed.length > snapData.items.length) {
-                console.log(`[Auto-Sync Desa] Mempromosikan data lokal (${localParsed.length} entitas vs cloud ${snapData.items.length}) ke Cloud.`);
-                setDoc(docRef, {
-                  items: localParsed,
-                  updatedAt: new Date().toISOString(),
-                  title: `Prioritas Desa & Puskesmas ${currentYear}`
-                }, { merge: true }).catch(() => {});
-                return;
-              }
-            }
-          } catch (_) {}
-
           isRemoteUpdateRef.current = true;
-          const sorted = [...snapData.items].sort((a, b) => b.skorTotal - a.skorTotal);
+          const sorted = stableSortDesaPuskesmas(snapData.items);
           const withRank = sorted.map((item, idx) => ({ ...item, ranking: idx + 1, no: idx + 1 }));
           setData(withRank);
           localStorage.setItem(storageKey, JSON.stringify(withRank));
@@ -156,7 +143,7 @@ export const PrioritasDesaPuskesmasView: React.FC<PrioritasDesaPuskesmasViewProp
   };
 
   const handleSaveData = (newData: PrioritasDesaPuskesmasItem[], forceInstantCloud: boolean = false) => {
-    const sorted = [...newData].sort((a, b) => b.skorTotal - a.skorTotal);
+    const sorted = stableSortDesaPuskesmas(newData);
     const withRank = sorted.map((item, idx) => ({ ...item, ranking: idx + 1, no: idx + 1 }));
     setData(withRank);
     localStorage.setItem(storageKey, JSON.stringify(withRank));
@@ -197,7 +184,7 @@ export const PrioritasDesaPuskesmasView: React.FC<PrioritasDesaPuskesmasViewProp
       if (snap.exists()) {
         const snapData = snap.data();
         if (snapData && Array.isArray(snapData.items)) {
-          const sorted = [...snapData.items].sort((a, b) => b.skorTotal - a.skorTotal);
+          const sorted = stableSortDesaPuskesmas(snapData.items);
           const withRank = sorted.map((item, idx) => ({ ...item, ranking: idx + 1, no: idx + 1 }));
           setData(withRank);
           localStorage.setItem(storageKey, JSON.stringify(withRank));
