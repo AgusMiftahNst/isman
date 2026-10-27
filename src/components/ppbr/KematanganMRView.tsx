@@ -4,7 +4,7 @@ import { doc, onSnapshot, setDoc, getDoc } from 'firebase/firestore';
 import { KematanganMRItem, INITIAL_KEMATANGAN_MR, AuditUniverseItem, INITIAL_AUDIT_UNIVERSE } from './ppbrData';
 import { exportToExcel, exportToPdf } from './ppbrExport';
 import { ConfirmModal } from '../common/ConfirmModal';
-import { getScopedKey, getScopedPPBRDocId, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
+import { getScopedKey, getScopedPPBRDocId, getSelectedYear, DEFAULT_YEAR, isPPBRAdminUser } from './ppbrYearHelper';
 import {
   BarChart2,
   Plus,
@@ -48,18 +48,7 @@ export const KematanganMRView: React.FC<KematanganMRViewProps> = ({ isAdmin: isA
   const storageKey = getScopedKey('ppbr_kematangan_mr', currentYear);
   const docId = getScopedPPBRDocId('kematangan_mr', currentYear);
 
-  const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
-    try {
-      const saved = localStorage.getItem('isman_user');
-      if (saved) {
-        const u = JSON.parse(saved);
-        const name = (u.username || '').toLowerCase();
-        const role = (u.role || '').toLowerCase();
-        return name === 'admin' || role === 'administrator' || role === 'admin';
-      }
-    } catch (_) {}
-    return false;
-  })();
+  const isAdmin = isPPBRAdminUser() && (isAdminProp ?? true);
 
   // Cloud Real-time Synchronization States
   const [cloudStatus, setCloudStatus] = useState<'synced' | 'saving' | 'offline' | 'error'>('synced');
@@ -86,23 +75,6 @@ export const KematanganMRView: React.FC<KematanganMRViewProps> = ({ isAdmin: isA
       if (snap.exists()) {
         const snapData = snap.data();
         if (snapData && Array.isArray(snapData.items)) {
-          // Jika laptop ini punya data lokal lebih lengkap, promosikan ke cloud
-          try {
-            const localRaw = localStorage.getItem(storageKey);
-            if (localRaw) {
-              const localParsed = JSON.parse(localRaw);
-              if (Array.isArray(localParsed) && localParsed.length > snapData.items.length) {
-                console.log(`[Auto-Sync KMR] Laptop ini memiliki data lokal lebih banyak (${localParsed.length} vs cloud ${snapData.items.length}), mengunggah ke Cloud.`);
-                setDoc(docRef, {
-                  items: localParsed,
-                  updatedAt: new Date().toISOString(),
-                  title: `Tingkat Kematangan MR ${currentYear}`
-                }, { merge: true }).catch(() => {});
-                return;
-              }
-            }
-          } catch (_) {}
-
           isRemoteUpdateRef.current = true;
           setData(snapData.items);
           localStorage.setItem(storageKey, JSON.stringify(snapData.items));
