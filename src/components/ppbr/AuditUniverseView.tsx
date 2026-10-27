@@ -4,7 +4,9 @@ import { exportToExcel, exportToPdf } from './ppbrExport';
 import { ConfirmModal } from '../common/ConfirmModal';
 import { db } from '../../lib/firebase';
 import { doc, onSnapshot, setDoc, getDoc, collection, getDocs } from 'firebase/firestore';
-import { getScopedKey, getScopedPPBRDocId, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
+import { getScopedKey, getScopedPPBRDocId, getSelectedYear, DEFAULT_YEAR, isPPBRAdminUser } from './ppbrYearHelper';
+import { getDeviceOperatorName, DeviceOperatorBadge } from '../common/DeviceRegistrationModal';
+import { getOperatorPalette } from './AreaPengawasanMandatoryView';
 import {
   Search,
   Plus,
@@ -27,7 +29,14 @@ import {
   Upload,
   Download,
   Sparkles,
-  ArrowUpDown
+  ArrowUpDown,
+  History,
+  Clock,
+  UserCheck,
+  ShieldCheck,
+  Laptop,
+  Eye,
+  Filter
 } from 'lucide-react';
 
 const DEFAULT_INDIKATOR_TUJUAN: Record<string, string> = {
@@ -267,6 +276,76 @@ export const detectOPDForProgram = (
   return null;
 };
 
+export interface AuditUniverseVersion {
+  id: string;
+  timestamp: string;
+  formattedTime: string;
+  operatorName: string;
+  itemCount: number;
+  totalAnggaran: number;
+  items: AuditUniverseItem[];
+  actionDescription: string;
+}
+
+export const mergeAuditUniverseVersions = (
+  v1: AuditUniverseVersion[] = [],
+  v2: AuditUniverseVersion[] = []
+): AuditUniverseVersion[] => {
+  const map = new Map<string, AuditUniverseVersion>();
+  [...v1, ...v2].forEach(ver => {
+    if (ver && ver.id) {
+      map.set(ver.id, ver);
+    }
+  });
+  return Array.from(map.values())
+    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+    .slice(0, 100);
+};
+
+// Penggabungan multi-pengguna: mencegah baris yang baru ditambah atau sedang diedit tertimpa snapshot rekan tim
+export const mergeAuditUniverseItems = (
+  localItems: AuditUniverseItem[] = [],
+  remoteItems: AuditUniverseItem[] = [],
+  recentlyModifiedIds: Set<string> = new Set(),
+  deletedIds: Set<string> = new Set()
+): AuditUniverseItem[] => {
+  if (!remoteItems || remoteItems.length === 0) return localItems;
+  if (!localItems || localItems.length === 0) return remoteItems;
+
+  const localMap = new Map<string, AuditUniverseItem>();
+  localItems.forEach(item => {
+    if (item && item.id) localMap.set(item.id, item);
+  });
+
+  const merged: AuditUniverseItem[] = [];
+  const processedIds = new Set<string>();
+
+  // 1. Muat baris remote yang valid
+  remoteItems.forEach(rItem => {
+    if (!rItem || !rItem.id) return;
+    if (deletedIds.has(rItem.id)) return; // Jangan masukkan baris yang baru dihapus lokal
+
+    processedIds.add(rItem.id);
+    // Jika laptop ini baru saja mengedit baris ini (dalam beberapa detik terakhir), pertahankan input lokal
+    if (recentlyModifiedIds.has(rItem.id) && localMap.has(rItem.id)) {
+      merged.push(localMap.get(rItem.id)!);
+    } else {
+      merged.push(rItem);
+    }
+  });
+
+  // 2. Pertahankan baris lokal yang baru ditambahkan (belum sempat tersimpan ke remote)
+  localItems.forEach(lItem => {
+    if (!lItem || !lItem.id) return;
+    if (!processedIds.has(lItem.id) && !deletedIds.has(lItem.id)) {
+      processedIds.add(lItem.id);
+      merged.push(lItem);
+    }
+  });
+
+  return merged;
+};
+
 // Helper: Normalisasi data Audit Universe (Forward-fill Program & OPD untuk baris indikator tanpa nama program)
 export const normalizeAuditUniverseData = (
   items: AuditUniverseItem[],
@@ -289,7 +368,13 @@ export const normalizeAuditUniverseData = (
     const prevProg = (prev.programRpjmd || '').trim();
     const currProg = (curr.programRpjmd || '').trim();
 
-    if (prevProg !== '' && currProg === '') {
+    // PENTING: Hanya forward-fill jika baris ini memang memiliki teks indikator (bukan baris baru kosong!)
+    const hasIndicatorText = Boolean(
+      (curr.indikatorProgramRpjmd && curr.indikatorProgramRpjmd.trim()) ||
+      (curr.indikatorProgramRenstra && curr.indikatorProgramRenstra.trim())
+    );
+
+    if (prevProg !== '' && currProg === '' && hasIndicatorText) {
       const prevTujuan = (prev.tujuanRpjmd || '').trim();
       const currTujuan = (curr.tujuanRpjmd || '').trim();
       const prevSasaran = (prev.sasaranRpjmd || '').trim();
@@ -335,20 +420,8 @@ export const normalizeAuditUniverseData = (
     });
   }
 
-  // Step 2: Unify OPD, Irban, Renstra & Faktor Risiko untuk setiap Program RPJMD yang sama
-  interface ProgramCanonicalData {
-    opdPengampu?: string;
-    irbanPengampu?: string;
-    tujuanSasaranRenstra?: string;
-    indikatorRenstra?: string;
-    programRenstra?: string;
-    anggaran?: number;
-    prioritasRpjmn?: string;
-    sektorUnggulan?: string;
-    temuanFraudHukum?: string;
-    isuTerkini?: string;
-  }
-  const programCanonicalMap = new Map<string, ProgramCanonicalData>();
+  // Step 2: Wariskan OPD & Irban untuk baris indikator dari Program RPJMD yang sama HANYA jika baris tersebut masih kosong
+  const programCanonicalMap = new Map<string, { opdPengampu?: string; irbanPengampu?: string }>();
 
   result.forEach(item => {
     const prog = (item.programRpjmd || '').trim().toLowerCase();
@@ -362,16 +435,6 @@ export const normalizeAuditUniverseData = (
 
     if (!canon.opdPengampu && (item.opdPengampu || '').trim()) canon.opdPengampu = item.opdPengampu.trim();
     if (!canon.irbanPengampu && (item.irbanPengampu || '').trim()) canon.irbanPengampu = item.irbanPengampu.trim();
-    if (!canon.tujuanSasaranRenstra && (item.tujuanSasaranRenstra || '').trim()) canon.tujuanSasaranRenstra = item.tujuanSasaranRenstra.trim();
-    if (!canon.indikatorRenstra && (item.indikatorRenstra || '').trim()) canon.indikatorRenstra = item.indikatorRenstra.trim();
-    if (!canon.programRenstra && (item.programRenstra || '').trim()) canon.programRenstra = item.programRenstra.trim();
-    if ((!canon.anggaran || canon.anggaran === 0) && item.anggaran) canon.anggaran = Number(item.anggaran);
-    if (!canon.prioritasRpjmn && (item.prioritasRpjmn || '').trim()) canon.prioritasRpjmn = item.prioritasRpjmn.trim();
-    if ((!canon.sektorUnggulan || canon.sektorUnggulan === 'Bukan sektor unggulan daerah') && item.sektorUnggulan && item.sektorUnggulan !== 'Bukan sektor unggulan daerah') {
-      canon.sektorUnggulan = item.sektorUnggulan;
-    }
-    if (!canon.temuanFraudHukum && (item.temuanFraudHukum || '').trim()) canon.temuanFraudHukum = item.temuanFraudHukum.trim();
-    if (!canon.isuTerkini && (item.isuTerkini || '').trim()) canon.isuTerkini = item.isuTerkini.trim();
   });
 
   result.forEach(item => {
@@ -380,87 +443,13 @@ export const normalizeAuditUniverseData = (
     const canon = programCanonicalMap.get(prog);
     if (!canon) return;
 
-    if (canon.opdPengampu && (item.opdPengampu || '').trim() !== canon.opdPengampu) {
+    // HANYA wariskan OPD/Irban jika baris tersebut memang belum diisi sama sekali (jangan menimpa input atau penghapusan teks oleh user)
+    if (canon.opdPengampu && (!item.opdPengampu || !item.opdPengampu.trim())) {
       item.opdPengampu = canon.opdPengampu;
       hasChanges = true;
     }
-    if (canon.irbanPengampu && (item.irbanPengampu || '').trim() !== canon.irbanPengampu) {
+    if (canon.irbanPengampu && (!item.irbanPengampu || !item.irbanPengampu.trim())) {
       item.irbanPengampu = canon.irbanPengampu;
-      hasChanges = true;
-    }
-    if (canon.tujuanSasaranRenstra && (item.tujuanSasaranRenstra || '').trim() !== canon.tujuanSasaranRenstra) {
-      item.tujuanSasaranRenstra = canon.tujuanSasaranRenstra;
-      hasChanges = true;
-    }
-    if (canon.indikatorRenstra && (item.indikatorRenstra || '').trim() !== canon.indikatorRenstra) {
-      item.indikatorRenstra = canon.indikatorRenstra;
-      hasChanges = true;
-    }
-    if (canon.programRenstra && (item.programRenstra || '').trim() !== canon.programRenstra) {
-      item.programRenstra = canon.programRenstra;
-      hasChanges = true;
-    }
-    if (canon.anggaran !== undefined && (item.anggaran || 0) !== canon.anggaran) {
-      item.anggaran = canon.anggaran;
-      hasChanges = true;
-    }
-    if (canon.prioritasRpjmn && (item.prioritasRpjmn || '').trim() !== canon.prioritasRpjmn) {
-      item.prioritasRpjmn = canon.prioritasRpjmn;
-      hasChanges = true;
-    }
-    if (canon.sektorUnggulan && item.sektorUnggulan !== canon.sektorUnggulan) {
-      item.sektorUnggulan = canon.sektorUnggulan;
-      hasChanges = true;
-    }
-    if (canon.temuanFraudHukum && (item.temuanFraudHukum || '').trim() !== canon.temuanFraudHukum) {
-      item.temuanFraudHukum = canon.temuanFraudHukum;
-      hasChanges = true;
-    }
-    if (canon.isuTerkini && (item.isuTerkini || '').trim() !== canon.isuTerkini) {
-      item.isuTerkini = canon.isuTerkini;
-      hasChanges = true;
-    }
-  });
-
-  // Step 2.5: Unify Renstra OPD level (Irban, Tujuan Renstra, Indikator Renstra) untuk OPD yang sama
-  // Niatnya agar pengguna cukup 1 kali mengisi Renstra untuk 1 OPD
-  interface OPDCanonicalData {
-    irbanPengampu?: string;
-    tujuanSasaranRenstra?: string;
-    indikatorRenstra?: string;
-  }
-  const opdCanonicalMap = new Map<string, OPDCanonicalData>();
-  result.forEach(item => {
-    const opd = (item.opdPengampu || '').trim().toLowerCase();
-    if (!opd) return;
-
-    let canon = opdCanonicalMap.get(opd);
-    if (!canon) {
-      canon = {};
-      opdCanonicalMap.set(opd, canon);
-    }
-
-    if (!canon.irbanPengampu && (item.irbanPengampu || '').trim()) canon.irbanPengampu = item.irbanPengampu.trim();
-    if (!canon.tujuanSasaranRenstra && (item.tujuanSasaranRenstra || '').trim()) canon.tujuanSasaranRenstra = item.tujuanSasaranRenstra.trim();
-    if (!canon.indikatorRenstra && (item.indikatorRenstra || '').trim()) canon.indikatorRenstra = item.indikatorRenstra.trim();
-  });
-
-  result.forEach(item => {
-    const opd = (item.opdPengampu || '').trim().toLowerCase();
-    if (!opd) return;
-    const canon = opdCanonicalMap.get(opd);
-    if (!canon) return;
-
-    if (canon.irbanPengampu && (item.irbanPengampu || '').trim() !== canon.irbanPengampu) {
-      item.irbanPengampu = canon.irbanPengampu;
-      hasChanges = true;
-    }
-    if (canon.tujuanSasaranRenstra && (item.tujuanSasaranRenstra || '').trim() !== canon.tujuanSasaranRenstra) {
-      item.tujuanSasaranRenstra = canon.tujuanSasaranRenstra;
-      hasChanges = true;
-    }
-    if (canon.indikatorRenstra && (item.indikatorRenstra || '').trim() !== canon.indikatorRenstra) {
-      item.indikatorRenstra = canon.indikatorRenstra;
       hasChanges = true;
     }
   });
@@ -493,8 +482,18 @@ export const sortAuditUniverseByOPD = (items: AuditUniverseItem[]): AuditUnivers
       if (cmpProg !== 0) return cmpProg;
     }
 
-    // 3. Dalam Program yang sama, pertahankan urutan nomor / indikator semula
-    return (a.no || 0) - (b.no || 0);
+    // 3. Dalam Program yang sama, pertahankan urutan nomor / indikator / ID yang stabil
+    const noCmp = (a.no || 0) - (b.no || 0);
+    if (noCmp !== 0) return noCmp;
+
+    const indA = (a.indikatorProgramRpjmd || '').trim();
+    const indB = (b.indikatorProgramRpjmd || '').trim();
+    if (indA && indB) {
+      const cmpInd = indA.localeCompare(indB, 'id', { sensitivity: 'base' });
+      if (cmpInd !== 0) return cmpInd;
+    }
+
+    return String(a.id || '').localeCompare(String(b.id || ''));
   });
 };
 
@@ -508,18 +507,7 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
   const storageKey = getScopedKey('ppbr_audit_universe', currentYear);
   const docId = getScopedPPBRDocId('audit_universe', currentYear);
 
-  const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
-    try {
-      const saved = localStorage.getItem('isman_user');
-      if (saved) {
-        const u = JSON.parse(saved);
-        const name = (u.username || '').toLowerCase();
-        const role = (u.role || '').toLowerCase();
-        return name === 'admin' || role === 'administrator' || role === 'admin';
-      }
-    } catch (_) {}
-    return false;
-  })();
+  const isAdmin = isPPBRAdminUser() && (isAdminProp ?? true);
 
   const [data, setData] = useState<AuditUniverseItem[]>(() => {
     const saved = localStorage.getItem(storageKey);
@@ -559,6 +547,60 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
   const isRemoteUpdateRef = useRef<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Reference state to avoid stale closure during remote snapshot merges
+  const dataRef = useRef<AuditUniverseItem[]>(data);
+  useEffect(() => {
+    dataRef.current = data;
+  }, [data]);
+  const recentlyModifiedRef = useRef<Set<string>>(new Set());
+  const deletedRowIdsRef = useRef<Set<string>>(new Set());
+
+  // Version History states (Accessible to all users for recovery, with Admin restore)
+  const [historyVersions, setHistoryVersions] = useState<AuditUniverseVersion[]>(() => {
+    try {
+      const saved = localStorage.getItem(storageKey + '_history');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (_) {}
+    return [];
+  });
+  const [showHistoryModal, setShowHistoryModal] = useState<boolean>(false);
+  const [selectedHistoryVersion, setSelectedHistoryVersion] = useState<AuditUniverseVersion | null>(null);
+  const [highlightChanges, setHighlightChanges] = useState<boolean>(true);
+  const [showOnlyModifiedRows, setShowOnlyModifiedRows] = useState<boolean>(false);
+
+  // Initial version seeding so Version History always has a baseline
+  useEffect(() => {
+    if (data.length > 0 && historyVersions.length === 0) {
+      const initialVer: AuditUniverseVersion = {
+        id: `v-au-init-${currentYear}`,
+        timestamp: new Date().toISOString(),
+        formattedTime: 'Versi Data Master (' + currentYear + ')',
+        operatorName: getDeviceOperatorName() || 'Sistem / Data Aktif',
+        itemCount: data.length,
+        totalAnggaran: data.reduce((acc, c) => acc + (Number(c.anggaran) || 0), 0),
+        items: data,
+        actionDescription: `Rekaman data aktif (${data.length} program)`
+      };
+      setHistoryVersions([initialVer]);
+      try {
+        localStorage.setItem(storageKey + '_history', JSON.stringify([initialVer]));
+      } catch (_) {}
+    }
+  }, [data.length, currentYear, storageKey, historyVersions.length]);
+
+  // Global event listener to open Version History from shortcut/navbar
+  useEffect(() => {
+    const handleOpenHistoryEvent = () => {
+      setSelectedHistoryVersion(historyVersions[0] || null);
+      setShowHistoryModal(true);
+    };
+    window.addEventListener('open_ppbr_history_modal', handleOpenHistoryEvent);
+    return () => window.removeEventListener('open_ppbr_history_modal', handleOpenHistoryEvent);
+  }, [historyVersions]);
+
   // Safely preserve any existing local data on laptop before cloud can overwrite it
   const [localBackupData, setLocalBackupData] = useState<AuditUniverseItem[] | null>(() => {
     try {
@@ -581,8 +623,9 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
     return null;
   });
 
+  // Tampilkan banner pemulihan HANYA jika tabel aktif kosong dan laptop memiliki cadangan (mencegah timpa tak sengaja)
   const [showLocalRestoreBanner, setShowLocalRestoreBanner] = useState<boolean>(() => {
-    return currentYear === DEFAULT_YEAR && localBackupData !== null && localBackupData.length > 0;
+    return isAdmin && data.length === 0 && localBackupData !== null && localBackupData.length > 0;
   });
 
   // Irban List state with local persistence & Firestore sync (Single Source of Truth)
@@ -639,12 +682,10 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
 
       if (isMounted) {
         setRsoContexts(loaded);
-        // Langsung auto-fill dan normalisasi seluruh baris data yang ada tanpa perlu klik manual
+        // Normalisasi data lokal dengan konteks risiko tanpa memicu auto-save ke remote
         setData(prevData => {
-          const { normalized, hasChanges } = normalizeAuditUniverseData(prevData, loaded);
-          if (hasChanges) {
-            handleSaveData(normalized, true);
-          }
+          const { normalized } = normalizeAuditUniverseData(prevData, loaded);
+          dataRef.current = normalized;
           return normalized;
         });
       }
@@ -656,62 +697,63 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
     };
   }, [currentYear]);
 
-  // Real-time listener: Listen to Firestore Cloud Database updates
+  // Stable Cloud Sync (RSO/ROO Architecture): Load initial data on mount, never stomp on active rows
   useEffect(() => {
-    // 1. Subscribe to Audit Universe in Firestore
+    let isMounted = true;
     const auDocRef = doc(db, 'ppbr_data', docId);
-    const unsubAU = onSnapshot(auDocRef, (snap) => {
+
+    // Initial fetch from Firestore (like RSO/ROO)
+    getDoc(auDocRef).then((snap) => {
+      if (!isMounted) return;
       if (snap.exists()) {
         const snapData = snap.data();
-        if (snapData && Array.isArray(snapData.items)) {
-          // Jika laptop ini menyimpan data lokal/backup yang jauh lebih lengkap (misal 100 atau 103 baris vs cloud baru 55)
-          try {
-            const rawBackup = localStorage.getItem('ppbr_audit_universe_local_backup') || localStorage.getItem(storageKey);
-            if (rawBackup) {
-              const parsedBackup = JSON.parse(rawBackup);
-              if (Array.isArray(parsedBackup) && parsedBackup.length > snapData.items.length) {
-                console.log(`[Auto-Sync AU] Laptop ini memiliki data lebih lengkap (${parsedBackup.length} baris vs cloud ${snapData.items.length}), mempromosikan ke Cloud master.`);
-                setDoc(auDocRef, {
-                  items: parsedBackup,
-                  updatedAt: new Date().toISOString(),
-                  title: `Audit Universe Master ${currentYear}`
-                }, { merge: true }).catch(() => {});
-                return;
-              }
+        if (snapData && Array.isArray(snapData.items) && snapData.items.length > 0) {
+          setData(prev => {
+            if (prev.length === 0) {
+              dataRef.current = snapData.items;
+              localStorage.setItem(storageKey, JSON.stringify(snapData.items));
+              return snapData.items;
             }
-          } catch (_) {}
-
-          isRemoteUpdateRef.current = true;
-          const { normalized, hasChanges } = normalizeAuditUniverseData(snapData.items);
-          setData(normalized);
-          localStorage.setItem(storageKey, JSON.stringify(normalized));
+            // Gabungkan tanpa pernah menghapus baris lokal
+            const merged = mergeAuditUniverseItems(prev, snapData.items);
+            dataRef.current = merged;
+            localStorage.setItem(storageKey, JSON.stringify(merged));
+            return merged;
+          });
+          if (Array.isArray(snapData.historyVersions) && snapData.historyVersions.length > 0) {
+            setHistoryVersions(prev => mergeAuditUniverseVersions(prev, snapData.historyVersions));
+          }
           setCloudStatus('synced');
           if (snapData.updatedAt) {
             try {
               setLastSyncedTime(new Date(snapData.updatedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-            } catch (_) {
-              setLastSyncedTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-            }
+            } catch (_) {}
           }
-          if (hasChanges) {
-            setDoc(auDocRef, {
-              items: normalized,
-              updatedAt: new Date().toISOString()
-            }, { merge: true }).catch(err => console.warn('Auto-save normalized data to cloud:', err));
-          }
-          setTimeout(() => {
-            isRemoteUpdateRef.current = false;
-          }, 300);
         }
-      } else {
-        // If not in Firestore yet, automatically push current data so all users see it
-        setDoc(auDocRef, {
-          items: data,
-          updatedAt: new Date().toISOString(),
-          title: `Audit Universe Master ${currentYear}`
-        }, { merge: true }).catch(err => {
-          console.warn('Initial push to cloud error:', err);
-        });
+      }
+    }).catch(err => {
+      console.warn('Initial AU getDoc warning:', err);
+    });
+
+    // Real-time listener: HANYA untuk memperbarui riwayat versi, TIDAK PERNAH menimpa baris aktif saat sedang diedit
+    const unsubAU = onSnapshot(auDocRef, (snap) => {
+      if (snap.exists()) {
+        const snapData = snap.data();
+        if (snapData && Array.isArray(snapData.historyVersions) && snapData.historyVersions.length > 0) {
+          setHistoryVersions(prev => {
+            const mergedHist = mergeAuditUniverseVersions(prev, snapData.historyVersions);
+            try {
+              localStorage.setItem(storageKey + '_history', JSON.stringify(mergedHist));
+            } catch (_) {}
+            return mergedHist;
+          });
+        }
+        // Hanya sinkronkan data items jika tabel lokal saat ini masih kosong
+        if (snapData && Array.isArray(snapData.items) && dataRef.current.length === 0 && snapData.items.length > 0) {
+          setData(snapData.items);
+          dataRef.current = snapData.items;
+          localStorage.setItem(storageKey, JSON.stringify(snapData.items));
+        }
       }
     }, (err) => {
       console.warn('Firestore Audit Universe listener warning:', err?.message || err);
@@ -740,6 +782,7 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
     });
 
     return () => {
+      isMounted = false;
       unsubAU();
       unsubIrban();
       if (saveTimeoutRef.current) {
@@ -747,6 +790,18 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
       }
     };
   }, [docId, currentYear, storageKey]);
+
+  // Listener untuk event global pembukaan modal Riwayat Versi Audit Universe dari header
+  useEffect(() => {
+    const handleOpenHistory = () => {
+      setSelectedHistoryVersion(historyVersions[0] || null);
+      setShowHistoryModal(true);
+    };
+    window.addEventListener('open_audit_universe_history_modal', handleOpenHistory);
+    return () => {
+      window.removeEventListener('open_audit_universe_history_modal', handleOpenHistory);
+    };
+  }, [historyVersions]);
 
   const handleSaveIrbanList = (newList: string[]) => {
     setIrbanList(newList);
@@ -891,10 +946,14 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
     onConfirm: () => {}
   });
 
-  // Dual Persistence: Save to local state + localStorage + Firestore Cloud
-  const handleSaveData = (newData: AuditUniverseItem[], immediateCloud = false) => {
+  // Dual Persistence: Save to local state + localStorage + Firestore Cloud + Snapshot Version History
+  const handleSaveData = (newData: AuditUniverseItem[], immediateCloud = false, actionNote?: string) => {
     setData(newData);
+    dataRef.current = newData;
     localStorage.setItem(storageKey, JSON.stringify(newData));
+    if (newData.length > 0) {
+      localStorage.setItem('ppbr_audit_universe_emergency_backup', JSON.stringify(newData));
+    }
 
     // If update originated from remote snapshot, do not re-emit to cloud
     if (isRemoteUpdateRef.current) return;
@@ -907,9 +966,67 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
     const doCloudSave = async () => {
       try {
         const nowIso = new Date().toISOString();
+        const currentOp = getDeviceOperatorName();
+        const prevCount = historyVersions[0]?.itemCount ?? newData.length;
+        const note = actionNote || (
+          newData.length > prevCount
+            ? `Menambah program (+${newData.length - prevCount} baris)`
+            : newData.length < prevCount
+            ? `Menghapus program (-${prevCount - newData.length} baris)`
+            : `Pembaruan data (${newData.length} baris program)`
+        );
+
+        const newVersion: AuditUniverseVersion = {
+          id: `v-au-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          timestamp: nowIso,
+          formattedTime: new Date(nowIso).toLocaleString('id-ID', {
+            day: 'numeric',
+            month: 'short',
+            hour: '2-digit',
+            minute: '2-digit'
+          }),
+          operatorName: currentOp || 'Sistem / Pengguna',
+          itemCount: newData.length,
+          totalAnggaran: newData.reduce((acc, c) => acc + (Number(c.anggaran) || 0), 0),
+          items: newData,
+          actionDescription: note
+        };
+
+        // Jika versi terakhir dibuat dalam 45 detik terakhir oleh operator yang sama dan jumlah baris sama,
+        // perbarui versi teratas tersebut agar riwayat tetap rapi namun seluruh perubahan teks tersimpan utuh
+        let updatedHistory: AuditUniverseVersion[];
+        const latestVer = historyVersions[0];
+        const isRecentSameOperator = Boolean(
+          latestVer &&
+          latestVer.operatorName === newVersion.operatorName &&
+          latestVer.itemCount === newVersion.itemCount &&
+          (Date.now() - new Date(latestVer.timestamp).getTime() < 45000)
+        );
+
+        if (isRecentSameOperator) {
+          const mergedLatest: AuditUniverseVersion = {
+            ...latestVer,
+            timestamp: nowIso,
+            formattedTime: newVersion.formattedTime,
+            items: newData,
+            totalAnggaran: newVersion.totalAnggaran,
+            actionDescription: note
+          };
+          updatedHistory = [mergedLatest, ...historyVersions.slice(1)];
+        } else {
+          updatedHistory = mergeAuditUniverseVersions([newVersion], historyVersions);
+        }
+
+        setHistoryVersions(updatedHistory);
+        try {
+          localStorage.setItem(storageKey + '_history', JSON.stringify(updatedHistory));
+        } catch (_) {}
+
         await setDoc(doc(db, 'ppbr_data', docId), {
           items: newData,
-          updatedAt: nowIso
+          historyVersions: updatedHistory.slice(0, 50),
+          updatedAt: nowIso,
+          title: `Audit Universe Master ${currentYear}`
         }, { merge: true });
         setCloudStatus('synced');
         setLastSyncedTime(new Date(nowIso).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
@@ -924,6 +1041,42 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
     } else {
       saveTimeoutRef.current = setTimeout(doCloudSave, 600);
     }
+  };
+
+  // Handler memulihkan versi data riwayat ke tabel utama
+  const handleRestoreVersion = (version: AuditUniverseVersion) => {
+    setConfirmModal({
+      isOpen: true,
+      title: 'Pulihkan Versi Riwayat Ini?',
+      message: `Apakah Anda yakin ingin memulihkan tabel Audit Universe ke versi ${version.formattedTime} oleh ${version.operatorName}?`,
+      detail: `Tabel akan digantikan dengan ${version.itemCount} baris program dari versi ini. Aksi pemulihan ini juga akan dicatat ke riwayat versi.`,
+      confirmText: 'Ya, Pulihkan Versi Ini',
+      variant: 'info',
+      onConfirm: () => {
+        handleSaveData(version.items, true, `Dipulihkan dari versi ${version.formattedTime} (${version.operatorName})`);
+        setShowHistoryModal(false);
+        setSelectedHistoryVersion(null);
+        setToastNotice(`Berhasil memulihkan ${version.itemCount} baris program dari versi ${version.formattedTime}!`);
+        setTimeout(() => setToastNotice(null), 4000);
+      }
+    });
+  };
+
+  // Handler pemulihan darurat dari cadangan lokal laptop ini
+  const handleRestoreEmergencyLocal = (sourceKey: string, itemsToRestore: AuditUniverseItem[]) => {
+    setConfirmModal({
+      isOpen: true,
+      title: 'Pulihkan Cadangan Laptop Ini?',
+      message: `Ditemukan cadangan lokal "${sourceKey}" berisi ${itemsToRestore.length} baris data Audit Universe. Apakah Anda ingin memulihkannya ke tabel aktif dan menyinkronkannya ke Cloud?`,
+      confirmText: 'Ya, Pulihkan Data Ini',
+      variant: 'info',
+      onConfirm: () => {
+        handleSaveData(itemsToRestore, true, `Pemulihan darurat dari cadangan lokal (${sourceKey})`);
+        setShowHistoryModal(false);
+        setToastNotice(`Berhasil memulihkan ${itemsToRestore.length} baris data dari memori laptop ini!`);
+        setTimeout(() => setToastNotice(null), 4000);
+      }
+    });
   };
 
   // Manual Trigger: Pull latest data or Push current data to Firestore
@@ -941,11 +1094,14 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
         }));
         const { normalized } = normalizeAuditUniverseData(mapped);
         setData(normalized);
+        dataRef.current = normalized;
         localStorage.setItem(storageKey, JSON.stringify(normalized));
       } else {
         await setDoc(doc(db, 'ppbr_data', docId), {
           items: data,
-          updatedAt: new Date().toISOString()
+          historyVersions: historyVersions,
+          updatedAt: new Date().toISOString(),
+          title: `Audit Universe Master ${currentYear}`
         }, { merge: true });
       }
       setCloudStatus('synced');
@@ -1039,6 +1195,27 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
     e.target.value = '';
   };
 
+  // Labels untuk deskripsi aksi riwayat versi
+  const FIELD_LABELS: Record<string, string> = {
+    tujuanRpjmd: 'Tujuan RPJMD',
+    indikatorTujuanRpjmd: 'Indikator Tujuan RPJMD',
+    sasaranRpjmd: 'Sasaran RPJMD',
+    indikatorSasaranRpjmd: 'Indikator Sasaran RPJMD',
+    programRpjmd: 'Program RPJMD',
+    indikatorProgramRpjmd: 'Indikator Program RPJMD',
+    opdPengampu: 'OPD Pengampu',
+    irbanPengampu: 'Irban Pengampu',
+    tujuanSasaranRenstra: 'Tujuan/Sasaran Renstra OPD',
+    indikatorRenstra: 'Indikator Renstra OPD',
+    programRenstra: 'Program Renstra OPD',
+    indikatorProgramRenstra: 'Indikator Program Renstra',
+    anggaran: 'Anggaran Program',
+    prioritasRpjmn: 'Prioritas RPJMN',
+    sektorUnggulan: 'Sektor Unggulan',
+    temuanFraudHukum: 'Temuan Fraud/Hukum',
+    isuTerkini: 'Isu Terkini'
+  };
+
   // Direct cell update
   const handleCellChange = (id: string, field: keyof AuditUniverseItem, value: any) => {
     let detectedOpdName: string | null = null;
@@ -1046,11 +1223,13 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
     const targetOpd = (targetItem?.opdPengampu || '').trim().toLowerCase();
     const isOpdLevelField = (field === 'tujuanSasaranRenstra' || field === 'indikatorRenstra' || field === 'irbanPengampu') && Boolean(targetOpd);
 
+    const affectedIds: string[] = [];
     const updated = data.map(item => {
       const matchId = item.id === id;
       const matchOpd = isOpdLevelField && (item.opdPengampu || '').trim().toLowerCase() === targetOpd;
 
       if (matchId || matchOpd) {
+        affectedIds.push(item.id);
         const next: AuditUniverseItem = {
           ...item,
           [field]: field === 'anggaran' ? Number(value) || 0 : value
@@ -1072,7 +1251,18 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
       }
       return item;
     });
-    handleSaveData(updated);
+
+    // Kunci seluruh ID baris yang terpengaruh agar tidak ditimpa oleh background snapshot saat proses simpan
+    affectedIds.forEach(affId => recentlyModifiedRef.current.add(affId));
+    setTimeout(() => {
+      affectedIds.forEach(affId => recentlyModifiedRef.current.delete(affId));
+    }, 6000);
+
+    const fieldLabel = FIELD_LABELS[field as string] || String(field);
+    const isClearing = value === '' || value === null || value === undefined;
+    const actionDesc = isClearing ? `Kosongkan ${fieldLabel}` : `Ubah ${fieldLabel}`;
+
+    handleSaveData(updated, false, actionDesc);
     if (detectedOpdName) {
       setToastNotice(`OPD otomatis terisi: "${detectedOpdName}"`);
       setTimeout(() => setToastNotice(null), 3000);
@@ -1093,11 +1283,13 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
     }
 
     let detectedOpdName: string | null = null;
+    const affectedIds: string[] = [];
     const updated = data.map(item => {
       const matchId = idsToUpdate.has(item.id);
       const matchOpd = isOpdLevelField && Boolean(targetOpd) && (item.opdPengampu || '').trim().toLowerCase() === targetOpd;
 
       if (matchId || matchOpd) {
+        affectedIds.push(item.id);
         const next: AuditUniverseItem = {
           ...item,
           [field]: field === 'anggaran' ? Number(value) || 0 : value
@@ -1118,7 +1310,18 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
       }
       return item;
     });
-    handleSaveData(updated);
+
+    // Kunci seluruh ID baris yang terpengaruh agar tidak ditimpa oleh background snapshot saat proses simpan
+    affectedIds.forEach(affId => recentlyModifiedRef.current.add(affId));
+    setTimeout(() => {
+      affectedIds.forEach(affId => recentlyModifiedRef.current.delete(affId));
+    }, 6000);
+
+    const fieldLabel = FIELD_LABELS[field as string] || String(field);
+    const isClearing = value === '' || value === null || value === undefined;
+    const actionDesc = isClearing ? `Kosongkan ${fieldLabel}` : `Ubah ${fieldLabel}`;
+
+    handleSaveData(updated, false, actionDesc);
     if (detectedOpdName) {
       setToastNotice(`OPD otomatis terisi: "${detectedOpdName}"`);
       setTimeout(() => setToastNotice(null), 3000);
@@ -1366,10 +1569,11 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
       confirmText: 'Ya, Hapus Indikator',
       variant: 'danger',
       onConfirm: () => {
+        deletedRowIdsRef.current.add(item.id);
         const updated = data
           .filter(d => d.id !== item.id)
           .map((d, idx) => ({ ...d, no: idx + 1 }));
-        handleSaveData(updated);
+        handleSaveData(updated, true, `Menghapus baris indikator: "${indicatorName}"`);
       }
     });
   };
@@ -1385,10 +1589,11 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
       confirmText: 'Ya, Hapus Program',
       variant: 'danger',
       onConfirm: () => {
+        idsToDelete.forEach(id => deletedRowIdsRef.current.add(id));
         const updated = data
           .filter(d => !idsToDelete.has(d.id))
           .map((d, idx) => ({ ...d, no: idx + 1 }));
-        handleSaveData(updated);
+        handleSaveData(updated, true, `Menghapus seluruh program: "${programName}"`);
       }
     });
   };
@@ -1491,10 +1696,11 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
       confirmText: 'Ya, Hapus Baris',
       variant: 'danger',
       onConfirm: () => {
+        deletedRowIdsRef.current.add(item.id);
         const updated = data
           .filter(d => d.id !== item.id)
           .map((d, idx) => ({ ...d, no: idx + 1 }));
-        handleSaveData(updated);
+        handleSaveData(updated, true, `Menghapus baris program: "${programName}"`);
       }
     });
   };
@@ -2253,6 +2459,17 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
               <span className="hidden sm:inline">Impor JSON</span>
             </button>
           )}
+          <button
+            onClick={() => {
+              setSelectedHistoryVersion(historyVersions[0] || null);
+              setShowHistoryModal(true);
+            }}
+            className="px-2.5 py-2 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition shadow-xs"
+            title="Lihat riwayat versi pengisian & pulihkan data yang terhapus"
+          >
+            <History className="w-3.5 h-3.5 text-indigo-600" />
+            <span>Riwayat Versi {historyVersions.length > 0 ? `(${historyVersions.length})` : ''}</span>
+          </button>
           <button
             onClick={handleExportJson}
             className="px-2.5 py-2 text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 rounded-lg text-xs font-medium flex items-center gap-1.5 transition"
@@ -3432,6 +3649,425 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
                 Selesai
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Version History & Emergency Recovery Modal */}
+      {showHistoryModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/75 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-6xl h-[92vh] flex flex-col overflow-hidden animate-in fade-in duration-200">
+            {/* Modal Header */}
+            {(() => {
+              const targetVer = selectedHistoryVersion || historyVersions[0];
+              const isCurrentActive = targetVer && (targetVer.items.length === data.length && targetVer.id === historyVersions[0]?.id);
+              const palette = targetVer ? getOperatorPalette(targetVer.operatorName) : null;
+              const currentProgSet = new Set(data.map(d => (d.programRpjmd || d.id || '').trim().toLowerCase()));
+              const missingCount = targetVer
+                ? targetVer.items.filter(item => {
+                    const key = (item.programRpjmd || item.id || '').trim().toLowerCase();
+                    return key && !currentProgSet.has(key);
+                  }).length
+                : 0;
+
+              const targetIndex = historyVersions.findIndex(v => v.id === targetVer?.id);
+              const baselineItems = (targetIndex >= 0 && targetIndex < historyVersions.length - 1)
+                ? (historyVersions[targetIndex + 1]?.items || [])
+                : data;
+
+              // Filter rows if user checked "Tampilkan hanya baris yang diedit"
+              const displayedItems = (targetVer?.items || []).filter(item => {
+                if (!showOnlyModifiedRows) return true;
+                const bItem = baselineItems.find(b => b.id === item.id);
+                if (!bItem) return true;
+                const isTujuanDiff = (item.tujuanRpjmd || '').trim() !== (bItem.tujuanRpjmd || '').trim();
+                const isProgDiff = (item.programRpjmd || '').trim() !== (bItem.programRpjmd || '').trim();
+                const isOpdDiff = (item.opdPengampu || '').trim() !== (bItem.opdPengampu || '').trim();
+                const isIrbanDiff = (item.irbanPengampu || '').trim() !== (bItem.irbanPengampu || '').trim();
+                const isRenstraDiff = (item.tujuanSasaranRenstra || '').trim() !== (bItem.tujuanSasaranRenstra || '').trim();
+                const isIndRenstraDiff = (item.indikatorRenstra || '').trim() !== (bItem.indikatorRenstra || '').trim();
+                const isAnggaranDiff = Number(item.anggaran || 0) !== Number(bItem.anggaran || 0);
+                const isMissingNow = !data.some(d => d.id === item.id);
+                return isTujuanDiff || isProgDiff || isOpdDiff || isIrbanDiff || isRenstraDiff || isIndRenstraDiff || isAnggaranDiff || isMissingNow;
+              });
+
+              const unmodifiedCount = (targetVer?.items?.length || 0) - displayedItems.length;
+
+              return (
+                <>
+                  <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between shrink-0 border-b border-slate-800">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 bg-indigo-500/20 text-indigo-300 rounded-xl border border-indigo-500/30">
+                        <History className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="font-bold text-sm sm:text-base text-white">
+                            Riwayat Versi Audit Universe ({currentYear})
+                          </h3>
+                          <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
+                            {historyVersions.length} Rekaman
+                          </span>
+                        </div>
+                        {targetVer && (
+                          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400 mt-0.5">
+                            <span className="font-medium text-slate-300">{targetVer.formattedTime}</span>
+                            <span>•</span>
+                            <span className="text-slate-300">Oleh: <strong>{targetVer.operatorName}</strong></span>
+                            <span>•</span>
+                            <span className="text-indigo-300 font-semibold">{targetVer.itemCount} Program</span>
+                            <span>•</span>
+                            <span className="italic text-slate-400 truncate max-w-xs">{targetVer.actionDescription}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      {targetVer && !isCurrentActive && (
+                        <button
+                          type="button"
+                          onClick={() => handleRestoreVersion(targetVer)}
+                          className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs rounded-xl flex items-center gap-1.5 shadow-md transition cursor-pointer"
+                          title="Kembalikan data tabel aktif saat ini ke versi ini"
+                        >
+                          <RotateCcw className="w-4 h-4" />
+                          <span>Pulihkan Versi Ini</span>
+                        </button>
+                      )}
+
+                      {targetVer && (
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadBackupJson(targetVer.items, `audit_universe_versi_${targetVer.timestamp.split('T')[0]}.json`)}
+                          className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs rounded-xl flex items-center gap-1.5 transition"
+                          title="Unduh file JSON dari versi ini"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span className="hidden sm:inline">Unduh JSON</span>
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowHistoryModal(false);
+                          setSelectedHistoryVersion(null);
+                        }}
+                        className="text-slate-400 hover:text-white p-2 rounded-xl hover:bg-slate-800 transition"
+                      >
+                        <X className="w-5 h-5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Body: Left Table Preview + Right History List */}
+                  <div className="flex-1 flex flex-col md:flex-row overflow-hidden bg-slate-100">
+                    {/* Left: Table Preview of Selected Version */}
+                    <div className="flex-1 flex flex-col bg-white overflow-hidden">
+                      {/* Sub-header Legend & Diff Warning */}
+                      <div className="px-5 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-slate-600 text-[11px] uppercase tracking-wider">
+                            Warna Sorotan Pengeditan:
+                          </span>
+                          {targetVer && palette && (
+                            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold border ${palette.pill}`}>
+                              <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: palette.dotHex }}></span>
+                              <span>{targetVer.operatorName}</span>
+                              <span className="text-[10px] font-normal opacity-80">(Bagian yang diedit diwarnai)</span>
+                            </span>
+                          )}
+                        </div>
+
+                        {missingCount > 0 && (
+                          <div className="text-[11px] font-bold text-amber-900 bg-amber-100/90 px-3 py-1 rounded-lg border border-amber-300 flex items-center gap-1.5 shadow-2xs">
+                            <AlertCircle className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                            <span>
+                              Pada versi ini terdapat <strong>{missingCount} program</strong> yang saat ini hilang dari tabel aktif! Klik tombol <strong>Pulihkan Versi Ini</strong> untuk mengembalikannya.
+                            </span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Spreadsheet Preview Table */}
+                      <div className="flex-1 overflow-auto p-4 bg-slate-50/50">
+                        {unmodifiedCount > 0 && (
+                          <div className="mb-3 p-2 bg-slate-200/80 border border-slate-300 rounded-lg text-center text-xs font-medium text-slate-600">
+                            {unmodifiedCount} baris yang tidak diubah disembunyikan
+                          </div>
+                        )}
+
+                        <div className="bg-white rounded-xl border border-slate-300 shadow-xs overflow-hidden">
+                          <table className="w-full text-left text-xs border-collapse">
+                            <thead>
+                              <tr className="bg-slate-800 text-white font-bold text-[11px] uppercase sticky top-0 z-10">
+                                <th className="p-2 text-center w-12 border-r border-slate-700">No</th>
+                                <th className="p-2.5 border-r border-slate-700 min-w-[180px]">Tujuan RPJMD</th>
+                                <th className="p-2.5 border-r border-slate-700 min-w-[200px]">Program RPJMD</th>
+                                <th className="p-2.5 border-r border-slate-700 min-w-[170px]">OPD Pengampu</th>
+                                <th className="p-2.5 border-r border-slate-700 w-24 text-center">Irban</th>
+                                <th className="p-2.5 border-r border-slate-700 min-w-[200px] bg-indigo-900/40 text-indigo-200">Tujuan/Sasaran Renstra</th>
+                                <th className="p-2.5 border-r border-slate-700 min-w-[180px] bg-indigo-900/40 text-indigo-200">Indikator Renstra</th>
+                                <th className="p-2.5 text-right min-w-[130px]">Anggaran (Rp)</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-200">
+                              {displayedItems.length === 0 ? (
+                                <tr>
+                                  <td colSpan={8} className="p-8 text-center text-slate-400">
+                                    Tidak ada data dalam rekaman versi ini.
+                                  </td>
+                                </tr>
+                              ) : (
+                                displayedItems.map((item, idx) => {
+                                  const bItem = baselineItems.find(b => b.id === item.id);
+                                  const isNewRow = !bItem;
+                                  const isTujuanDiff = isNewRow || (bItem && (item.tujuanRpjmd || '').trim() !== (bItem.tujuanRpjmd || '').trim());
+                                  const isProgDiff = isNewRow || (bItem && (item.programRpjmd || '').trim() !== (bItem.programRpjmd || '').trim());
+                                  const isOpdDiff = isNewRow || (bItem && (item.opdPengampu || '').trim() !== (bItem.opdPengampu || '').trim());
+                                  const isIrbanDiff = isNewRow || (bItem && (item.irbanPengampu || '').trim() !== (bItem.irbanPengampu || '').trim());
+                                  const isRenstraDiff = isNewRow || (bItem && (item.tujuanSasaranRenstra || '').trim() !== (bItem.tujuanSasaranRenstra || '').trim());
+                                  const isIndRenstraDiff = isNewRow || (bItem && (item.indikatorRenstra || '').trim() !== (bItem.indikatorRenstra || '').trim());
+                                  const isAnggaranDiff = isNewRow || (bItem && Number(item.anggaran || 0) !== Number(bItem.anggaran || 0));
+
+                                  const progKey = (item.programRpjmd || item.id || '').trim().toLowerCase();
+                                  const isMissingInActive = progKey && !currentProgSet.has(progKey);
+
+                                  return (
+                                    <tr
+                                      key={item.id || idx}
+                                      className={`transition ${
+                                        isMissingInActive
+                                          ? 'bg-amber-50 hover:bg-amber-100/70 border-l-4 border-l-amber-500'
+                                          : 'hover:bg-slate-50'
+                                      }`}
+                                    >
+                                      <td className="p-2 text-center font-bold text-slate-500 border-r border-slate-200 bg-slate-50">
+                                        <div className="flex flex-col items-center gap-0.5">
+                                          <span>{idx + 1}</span>
+                                          {isNewRow && highlightChanges && (
+                                            <span className="px-1 py-0.2 bg-purple-600 text-white rounded text-[8px] font-black uppercase">
+                                              Baru
+                                            </span>
+                                          )}
+                                        </div>
+                                      </td>
+                                      <td className={`p-2.5 border-r border-slate-200 text-slate-700 font-medium max-w-xs truncate ${
+                                        highlightChanges && isTujuanDiff && palette ? `${palette.cellBg} ${palette.cellText} ${palette.cellBorder}` : ''
+                                      }`}>
+                                        {item.tujuanRpjmd || '-'}
+                                      </td>
+                                      <td className={`p-2.5 border-r border-slate-200 font-bold ${
+                                        highlightChanges && isProgDiff && palette ? `${palette.cellBg} ${palette.cellText} ${palette.cellBorder}` : 'text-slate-900'
+                                      }`}>
+                                        <div className="flex items-start gap-1.5">
+                                          {isMissingInActive && (
+                                            <span className="px-1.5 py-0.5 bg-amber-200 text-amber-900 rounded text-[9px] font-black uppercase shrink-0 mt-0.5">
+                                              Hilang Sekarang
+                                            </span>
+                                          )}
+                                          <span>{item.programRpjmd || item.programRenstra || '(Tanpa Nama Program)'}</span>
+                                        </div>
+                                      </td>
+                                      <td className={`p-2.5 border-r border-slate-200 font-semibold ${
+                                        highlightChanges && isOpdDiff && palette ? `${palette.cellBg} ${palette.cellText} ${palette.cellBorder}` : 'text-slate-800'
+                                      }`}>
+                                        {item.opdPengampu || '-'}
+                                      </td>
+                                      <td className={`p-2.5 border-r border-slate-200 text-center font-bold ${
+                                        highlightChanges && isIrbanDiff && palette ? `${palette.cellBg} ${palette.cellText} ${palette.cellBorder}` : 'text-indigo-700'
+                                      }`}>
+                                        {item.irbanPengampu || '-'}
+                                      </td>
+                                      <td className={`p-2.5 border-r border-slate-200 max-w-xs truncate font-medium ${
+                                        highlightChanges && isRenstraDiff && palette ? `${palette.cellBg} ${palette.cellText} ${palette.cellBorder}` : 'text-slate-800 bg-indigo-50/20'
+                                      }`}>
+                                        {item.tujuanSasaranRenstra || <span className="text-slate-400 italic">(kosong)</span>}
+                                      </td>
+                                      <td className={`p-2.5 border-r border-slate-200 max-w-xs truncate ${
+                                        highlightChanges && isIndRenstraDiff && palette ? `${palette.cellBg} ${palette.cellText} ${palette.cellBorder}` : 'text-slate-700 bg-indigo-50/20'
+                                      }`}>
+                                        {item.indikatorRenstra || <span className="text-slate-400 italic">(kosong)</span>}
+                                      </td>
+                                      <td className={`p-2.5 text-right font-mono ${
+                                        highlightChanges && isAnggaranDiff && palette ? `${palette.cellBg} ${palette.cellText} ${palette.cellBorder}` : 'text-slate-800'
+                                      }`}>
+                                        {item.anggaran ? new Intl.NumberFormat('id-ID').format(item.anggaran) : '0'}
+                                      </td>
+                                    </tr>
+                                  );
+                                })
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Right: History Sidebar + Emergency Local Recovery */}
+                    <div className="w-full md:w-80 border-t md:border-t-0 md:border-l border-slate-200 bg-slate-50 flex flex-col shrink-0">
+                      {/* Emergency Local Recovery Section */}
+                      <div className="p-3.5 bg-gradient-to-br from-indigo-50 to-amber-50 border-b border-slate-200 space-y-2">
+                        <div className="flex items-center gap-1.5 text-xs font-bold text-slate-800">
+                          <Laptop className="w-4 h-4 text-indigo-600" />
+                          <span>Penyimpanan Memori Laptop Ini</span>
+                        </div>
+                        <p className="text-[11px] text-slate-600 leading-tight">
+                          Jika data Anda sebelumnya terhapus atau tertimpa snapshot, gunakan cadangan darurat lokal di bawah ini:
+                        </p>
+
+                        {/* Local Emergency Backups */}
+                        {(() => {
+                          const candidates: Array<{ key: string; label: string; count: number; items: AuditUniverseItem[] }> = [];
+                          const checkKeys = [
+                            'ppbr_audit_universe_emergency_backup',
+                            'ppbr_audit_universe_local_backup',
+                            'ppbr_audit_universe',
+                            storageKey
+                          ];
+                          const seenCounts = new Set<number>();
+
+                          checkKeys.forEach(k => {
+                            try {
+                              const raw = localStorage.getItem(k);
+                              if (raw) {
+                                const parsed = JSON.parse(raw);
+                                if (Array.isArray(parsed) && parsed.length > 0 && !seenCounts.has(parsed.length)) {
+                                  seenCounts.add(parsed.length);
+                                  candidates.push({
+                                    key: k,
+                                    label: k === storageKey ? 'Data Cache Laptop' : k === 'ppbr_audit_universe_emergency_backup' ? 'Cadangan Darurat Terakhir' : 'Cadangan Master Laptop',
+                                    count: parsed.length,
+                                    items: parsed
+                                  });
+                                }
+                              }
+                            } catch (_) {}
+                          });
+
+                          if (candidates.length === 0) {
+                            return <p className="text-[10px] text-slate-400 italic">Tidak ada cadangan memori terpisah di browser ini.</p>;
+                          }
+
+                          return (
+                            <div className="space-y-1.5 pt-1">
+                              {candidates.map(cand => (
+                                <div key={cand.key} className="p-2 bg-white rounded-lg border border-indigo-200/80 shadow-2xs flex items-center justify-between gap-2">
+                                  <div>
+                                    <p className="font-bold text-[11px] text-slate-800">{cand.label}</p>
+                                    <p className="text-[10px] text-indigo-600 font-semibold">{cand.count} Baris Program</p>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRestoreEmergencyLocal(cand.key, cand.items)}
+                                    className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md text-[10px] font-bold transition shadow-2xs cursor-pointer"
+                                    title="Pulihkan data dari cadangan memori ini"
+                                  >
+                                    Pulihkan
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          );
+                        })()}
+                      </div>
+
+                      {/* Header of Version List */}
+                      <div className="px-4 py-2.5 bg-slate-100 border-b border-slate-200 flex items-center justify-between">
+                        <span className="font-bold text-xs text-slate-700 uppercase tracking-wider">
+                          Daftar Versi Tersimpan
+                        </span>
+                        <span className="text-[11px] font-medium text-slate-500">
+                          {historyVersions.length} Titik Waktu
+                        </span>
+                      </div>
+
+                      {/* List of Versions */}
+                      <div className="flex-1 overflow-y-auto divide-y divide-slate-200">
+                        {historyVersions.length === 0 ? (
+                          <div className="p-8 text-center text-xs text-slate-400">
+                            Belum ada rekaman riwayat versi.
+                          </div>
+                        ) : (
+                          historyVersions.map((ver, idx) => {
+                            const isSelected = targetVer?.id === ver.id;
+                            const isLatest = idx === 0;
+                            const verPalette = getOperatorPalette(ver.operatorName);
+
+                            return (
+                              <button
+                                key={ver.id}
+                                type="button"
+                                onClick={() => setSelectedHistoryVersion(ver)}
+                                className={`w-full text-left p-3.5 transition flex flex-col gap-1.5 ${
+                                  isSelected
+                                    ? 'bg-white border-l-4 border-l-indigo-600 shadow-xs'
+                                    : 'hover:bg-slate-100/80'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between gap-1">
+                                  <div className="flex items-center gap-1.5">
+                                    <span
+                                      className="w-2.5 h-2.5 rounded-full shrink-0"
+                                      style={{ backgroundColor: verPalette.dotHex }}
+                                    ></span>
+                                    <span className="font-bold text-xs text-slate-900 truncate max-w-[130px]">
+                                      {ver.operatorName}
+                                    </span>
+                                  </div>
+                                  <span className="text-[10px] text-slate-400 whitespace-nowrap">
+                                    {ver.formattedTime}
+                                  </span>
+                                </div>
+
+                                <div className="flex items-center justify-between text-[11px]">
+                                  <span className="font-semibold text-slate-700">
+                                    {ver.itemCount} Program
+                                  </span>
+                                  {isLatest && (
+                                    <span className="px-1.5 py-0.5 bg-emerald-100 text-emerald-800 rounded text-[9px] font-black uppercase">
+                                      Terbaru
+                                    </span>
+                                  )}
+                                </div>
+
+                                <p className="text-[11px] text-slate-500 line-clamp-1 italic">
+                                  {ver.actionDescription}
+                                </p>
+                              </button>
+                            );
+                          })
+                        )}
+                      </div>
+
+                      {/* Sidebar Footer: Highlight Changes Checkboxes (Matching Google Sheets Reference) */}
+                      <div className="p-4 bg-white border-t border-slate-200 space-y-2.5 shrink-0 shadow-xs">
+                        <label className="flex items-center gap-2.5 cursor-pointer select-none text-xs font-bold text-slate-800 hover:text-indigo-900">
+                          <input
+                            type="checkbox"
+                            checked={highlightChanges}
+                            onChange={e => setHighlightChanges(e.target.checked)}
+                            className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 accent-indigo-600 cursor-pointer"
+                          />
+                          <span>Sorot perubahan (Highlight changes)</span>
+                        </label>
+
+                        <label className="flex items-center gap-2.5 cursor-pointer select-none text-xs text-slate-600 hover:text-slate-900">
+                          <input
+                            type="checkbox"
+                            checked={showOnlyModifiedRows}
+                            onChange={e => setShowOnlyModifiedRows(e.target.checked)}
+                            className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 accent-indigo-600 cursor-pointer"
+                          />
+                          <span>Hanya tampilkan baris yang diedit</span>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
           </div>
         </div>
       )}
