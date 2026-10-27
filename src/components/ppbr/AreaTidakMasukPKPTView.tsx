@@ -5,7 +5,7 @@ import { AreaTidakMasukPKPTItem, INITIAL_TIDAK_MASUK_PKPT } from './ppbrData';
 import { exportToExcel, exportToPdf } from './ppbrExport';
 import { ConfirmModal } from '../common/ConfirmModal';
 import { getMenu11Items, getMenu12Items, getMandatoryDefaultOPD } from './ppbrSyncHelpers';
-import { getScopedKey, getScopedPPBRDocId, getSelectedYear, DEFAULT_YEAR } from './ppbrYearHelper';
+import { getScopedKey, getScopedPPBRDocId, getSelectedYear, DEFAULT_YEAR, isPPBRAdminUser } from './ppbrYearHelper';
 import {
   Ban,
   Plus,
@@ -49,17 +49,7 @@ export const AreaTidakMasukPKPTView: React.FC<AreaTidakMasukPKPTViewProps> = ({ 
   const storageKey = getScopedKey('ppbr_tidak_masuk_pkpt', currentYear);
   const docId = getScopedPPBRDocId('tidak_masuk_pkpt', currentYear);
 
-  const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
-    try {
-      const saved = localStorage.getItem('isman_user');
-      if (saved) {
-        const u = JSON.parse(saved);
-        if (u.role === 'Operator') return false;
-        return !u.role || u.role === 'Administrator' || u.role === 'Admin' || u.username?.toLowerCase() === 'admin';
-      }
-    } catch (_) {}
-    return true;
-  })();
+  const isAdmin = isPPBRAdminUser() && (isAdminProp ?? true);
 
   // Cloud Real-time Synchronization States
   const [cloudStatus, setCloudStatus] = useState<'synced' | 'saving' | 'offline' | 'error'>('synced');
@@ -86,22 +76,6 @@ export const AreaTidakMasukPKPTView: React.FC<AreaTidakMasukPKPTViewProps> = ({ 
       if (snap.exists()) {
         const snapData = snap.data();
         if (snapData && Array.isArray(snapData.items)) {
-          try {
-            const localRaw = localStorage.getItem(storageKey);
-            if (localRaw) {
-              const localParsed = JSON.parse(localRaw);
-              if (Array.isArray(localParsed) && localParsed.length > snapData.items.length) {
-                console.log(`[Auto-Sync Non-PKPT] Mempromosikan data lokal (${localParsed.length} baris vs cloud ${snapData.items.length}) ke Cloud.`);
-                setDoc(docRef, {
-                  items: localParsed,
-                  updatedAt: new Date().toISOString(),
-                  title: `Area Tidak Masuk PKPT ${currentYear}`
-                }, { merge: true }).catch(() => {});
-                return;
-              }
-            }
-          } catch (_) {}
-
           isRemoteUpdateRef.current = true;
           setData(snapData.items);
           localStorage.setItem(storageKey, JSON.stringify(snapData.items));
@@ -396,11 +370,13 @@ export const AreaTidakMasukPKPTView: React.FC<AreaTidakMasukPKPTViewProps> = ({ 
     });
   };
 
-  const filteredData = data.filter(d =>
-    (d.areaPengawasan || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (d.opdPengampu || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (d.alasanTidakMasuk || '').toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredData = [...data]
+    .sort((a, b) => (Number(a.no) || 0) - (Number(b.no) || 0) || String(a.id || '').localeCompare(String(b.id || '')))
+    .filter(d =>
+      (d.areaPengawasan || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (d.opdPengampu || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (d.alasanTidakMasuk || '').toLowerCase().includes(searchTerm.toLowerCase())
+    );
 
   const allCandidates = getAllCandidates();
   const filteredCandidates = allCandidates.filter(c => {
