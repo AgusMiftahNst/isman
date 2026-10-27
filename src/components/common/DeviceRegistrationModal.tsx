@@ -5,6 +5,11 @@ const DEVICE_STORAGE_KEY = 'isman_device_operator_name';
 
 export const getDeviceOperatorName = (): string => {
   try {
+    const savedUser = localStorage.getItem('isman_user');
+    if (savedUser) {
+      const u = JSON.parse(savedUser);
+      if (u && (u.username || u.name)) return u.username || u.name;
+    }
     return localStorage.getItem(DEVICE_STORAGE_KEY) || 'Operator (Belum Terdaftar)';
   } catch (_) {
     return 'Operator';
@@ -117,13 +122,13 @@ export const DeviceRegistrationModal: React.FC<DeviceRegistrationModalProps> = (
             )}
           </div>
 
-          {/* Locked Notice */}
-          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3 flex items-start gap-2.5 text-amber-900">
-            <Lock className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+          {/* Saved Notice */}
+          <div className="bg-blue-50 border border-blue-200 rounded-2xl p-3 flex items-start gap-2.5 text-blue-900">
+            <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
             <div className="text-[11px] leading-relaxed">
-              <span className="font-bold block">Identitas Terkunci Permanen</span>
+              <span className="font-bold block">Pencatatan Otomatis</span>
               <span>
-                Identitas ini akan disimpan di laptop ini dan tidak dapat diubah kembali demi menjaga keaslian dan validitas riwayat data.
+                Nama ini tersimpan di browser laptop ini untuk menandai setiap penambahan, pengeditan, atau penghapusan data agar riwayat perubahan tercatat rapi dan transparan.
               </span>
             </div>
           </div>
@@ -136,7 +141,7 @@ export const DeviceRegistrationModal: React.FC<DeviceRegistrationModalProps> = (
               className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold rounded-xl text-xs shadow-md transition flex items-center justify-center gap-2 cursor-pointer disabled:cursor-not-allowed"
             >
               <CheckCircle2 className="w-4 h-4" />
-              <span>Daftarkan Identitas Laptop Ini</span>
+              <span>Simpan Identitas Laptop</span>
             </button>
           </div>
         </form>
@@ -166,7 +171,7 @@ export const DeviceOperatorBadge: React.FC<{ className?: string }> = ({ classNam
       <span className="font-bold text-teal-300 max-w-[140px] truncate" title={operatorName}>
         {operatorName}
       </span>
-      <Lock className="w-2.5 h-2.5 text-slate-400 ml-0.5" title="Terkunci permanen di laptop ini" />
+      <Lock className="w-2.5 h-2.5 text-teal-400/70 ml-0.5" title="Identitas tercatat di browser laptop ini" />
     </div>
   );
 };
