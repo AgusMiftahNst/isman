@@ -6,6 +6,7 @@ import { db } from '../../lib/firebase';
 import { doc, onSnapshot, setDoc, getDoc, collection, getDocs } from 'firebase/firestore';
 import { getScopedKey, getScopedPPBRDocId, getSelectedYear, DEFAULT_YEAR, isPPBRAdminUser } from './ppbrYearHelper';
 import { getDeviceOperatorName, DeviceOperatorBadge } from '../common/DeviceRegistrationModal';
+import { recordMenuActivity } from '../common/MenuActivityLogger';
 import { getOperatorPalette } from './AreaPengawasanMandatoryView';
 import {
   Search,
@@ -1028,6 +1029,23 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
           updatedAt: nowIso,
           title: `Audit Universe Master ${currentYear}`
         }, { merge: true });
+
+        recordMenuActivity({
+          menuKey: 'ppbr-1',
+          menuTitle: 'I. AUDIT UNIVERSE',
+          year: currentYear,
+          action: note.includes('Menambah')
+            ? 'Menambah Data'
+            : note.includes('Menghapus')
+            ? 'Menghapus Data'
+            : note.includes('Pulihkan')
+            ? 'Memulihkan Versi'
+            : 'Mengubah Data',
+          detail: note,
+          itemCount: newData.length,
+          operatorName: currentOp || 'Sistem / Pengguna'
+        }).catch(() => {});
+
         setCloudStatus('synced');
         setLastSyncedTime(new Date(nowIso).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
       } catch (err: any) {
