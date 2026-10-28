@@ -36,6 +36,7 @@ import {
   Filter
 } from 'lucide-react';
 import { getDeviceOperatorName, DeviceOperatorBadge } from '../common/DeviceRegistrationModal';
+import { recordMenuActivity } from '../common/MenuActivityLogger';
 
 export interface AreaMandatoryVersion {
   id: string;
@@ -671,6 +672,23 @@ export const AreaPengawasanMandatoryView: React.FC<AreaPengawasanMandatoryViewPr
           updatedAt: nowIso,
           title: `Area Pengawasan Mandatory (${currentYear})`
         }, { merge: true });
+
+        recordMenuActivity({
+          menuKey: 'ppbr-12',
+          menuTitle: 'XII. AREA PENGAWASAN MANDATORY',
+          year: currentYear,
+          action: note.includes('Menambah')
+            ? 'Menambah Data'
+            : note.includes('Menghapus')
+            ? 'Menghapus Data'
+            : note.includes('Pulihkan')
+            ? 'Memulihkan Versi'
+            : 'Mengubah Data',
+          detail: note,
+          itemCount: newData.length,
+          operatorName: currentOp || 'Sistem / Pengguna'
+        }).catch(() => {});
+
         setCloudStatus('synced');
         setLastSyncedTime(new Date(nowIso).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
       } catch (err: any) {
