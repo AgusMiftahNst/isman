@@ -13,7 +13,6 @@ import { UsulanPrioritasPengawasanView } from './UsulanPrioritasPengawasanView';
 import { AreaPengawasanMandatoryView } from './AreaPengawasanMandatoryView';
 import { AreaTidakMasukPKPTView } from './AreaTidakMasukPKPTView';
 import { FormatPKPTBerbasisRisikoView } from './FormatPKPTBerbasisRisikoView';
-import { DeviceRegistrationModal } from '../common/DeviceRegistrationModal';
 import { 
   FileText, 
   Layers, 
@@ -33,7 +32,7 @@ import {
   ArrowLeft
 } from 'lucide-react';
 
-import { getSelectedYear } from './ppbrYearHelper';
+import { getSelectedYear, isPPBRAdminUser } from './ppbrYearHelper';
 import { usePPBRGlobalSync } from './ppbrCloudSync';
 import { Cloud, Wifi } from 'lucide-react';
 
@@ -75,18 +74,7 @@ export const PPBRMasterContainer: React.FC<PPBRMasterContainerProps> = ({
   // Background Cloud Sync for all 14 menus across all laptops
   const { syncedCount, lastGlobalSync } = usePPBRGlobalSync(activeYear);
 
-  const isAdmin = isAdminProp !== undefined ? isAdminProp : (() => {
-    try {
-      const saved = localStorage.getItem('isman_user');
-      if (saved) {
-        const u = JSON.parse(saved);
-        const name = (u.username || '').toLowerCase();
-        const role = (u.role || '').toLowerCase();
-        return name === 'admin' || role === 'administrator' || role === 'admin';
-      }
-    } catch (_) {}
-    return false;
-  })();
+  const isAdmin = isPPBRAdminUser() && (isAdminProp ?? true);
 
   const currentMenuId = onSelectSubMenu ? activeSubMenu : internalMenu;
   const setMenu = (id: string) => {
@@ -136,8 +124,8 @@ export const PPBRMasterContainer: React.FC<PPBRMasterContainerProps> = ({
 
   return (
     <div className="w-full">
-      <DeviceRegistrationModal />
       {renderContent()}
     </div>
   );
 };
+
