@@ -46,6 +46,15 @@ export const getScopedPPBRDocId = (baseDocId: string, year?: string): string => 
 };
 
 /**
+ * Returns the scoped Firestore collection name for row-level granular storage.
+ */
+export const getScopedPPBRCollectionName = (baseCol: string, year?: string): string => {
+  const y = year || getSelectedYear();
+  if (y === DEFAULT_YEAR) return `ppbr_${baseCol}_rows`;
+  return `ppbr_${baseCol}_rows_${y}`;
+};
+
+/**
  * Returns the scoped Firestore doc ID for risk_context (RSO / ROO).
  */
 export const getRiskContextDocId = (uid: string, riskType: string, year?: string): string => {
