@@ -46,8 +46,7 @@ import {
   BookOpen,
   Ban,
   CalendarCheck,
-  Calendar,
-  History
+  Calendar
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
@@ -57,7 +56,6 @@ import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
 import html2canvas from 'html2canvas';
 import { PPBRMasterContainer } from './components/ppbr/PPBRMasterContainer';
-import { MenuActivityHistoryModal } from './components/common/MenuActivityHistoryModal';
 import {
   AVAILABLE_YEARS,
   DEFAULT_YEAR,
@@ -285,7 +283,6 @@ export default function App() {
   const [changePassSuccess, setChangePassSuccess] = useState('');
   const [isExporting, setIsExporting] = useState(false);
   const [selectedYear, setSelectedYear] = useState<string>(() => getSelectedYear());
-  const [showMenuHistoryModal, setShowMenuHistoryModal] = useState(false);
 
   useEffect(() => {
     const handleYearEvent = (e: any) => {
@@ -1935,16 +1932,7 @@ export default function App() {
           </div>
           <div className="flex items-center gap-3">
 
-            {/* Riwayat Menu Button */}
-            <button
-              type="button"
-              onClick={() => setShowMenuHistoryModal(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold uppercase tracking-wider text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-all cursor-pointer shadow-2xs hover:shadow-xs"
-              title={`Lihat Catatan Riwayat & Aktivitas untuk ${currentActiveMenuTitle}`}
-            >
-              <History size={14} className="text-indigo-600" />
-              <span>Riwayat</span>
-            </button>
+
 
             {/* Year Selector Dropdown */}
             <div className="flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-200">
@@ -2070,23 +2058,7 @@ service cloud.firestore {
         </section>
       </main>
 
-      {/* Modals */}
-      {showMenuHistoryModal && (
-        <MenuActivityHistoryModal
-          isOpen={showMenuHistoryModal}
-          onClose={() => setShowMenuHistoryModal(false)}
-          menuKey={currentMenuKey}
-          menuTitle={currentActiveMenuTitle}
-          year={selectedYear}
-          onOpenDetailedVersionDiff={
-            currentMenuKey === 'ppbr-1'
-              ? () => window.dispatchEvent(new Event('open_audit_universe_history_modal'))
-              : currentMenuKey === 'ppbr-12'
-              ? () => window.dispatchEvent(new Event('open_ppbr_history_modal'))
-              : undefined
-          }
-        />
-      )}
+
 
       <AnimatePresence>
         {showLogoutConfirm && (
