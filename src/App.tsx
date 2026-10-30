@@ -258,12 +258,14 @@ import firebaseConfig from '../firebase-applet-config.json';
 
 export default function App() {
   const [user, setUser] = useState<{username: string; role: string; uid: string} | null>(() => {
-    const savedUser = localStorage.getItem('isman_user');
+    // Sesi login persisten: ingat user yang pernah login di browser ini
+    const savedUser = localStorage.getItem('isman_user') || sessionStorage.getItem('isman_user');
     if (savedUser) {
       try {
         return JSON.parse(savedUser);
       } catch (e) {
         localStorage.removeItem('isman_user');
+        sessionStorage.removeItem('isman_user');
       }
     }
     return null;
@@ -387,8 +389,8 @@ export default function App() {
     initDefaultAdmin();
 
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      // Check manual session
-      const savedUser = localStorage.getItem('isman_user');
+      // Cek sesi login tersimpan di browser
+      const savedUser = localStorage.getItem('isman_user') || sessionStorage.getItem('isman_user');
       if (savedUser) {
         try {
           const parsed = JSON.parse(savedUser);
@@ -416,6 +418,7 @@ export default function App() {
                 const updatedUser = { username: accData.data().username, role: accData.data().role, uid: accData.id };
                 setUser(updatedUser);
                 localStorage.setItem('isman_user', JSON.stringify(updatedUser));
+                sessionStorage.setItem('isman_user', JSON.stringify(updatedUser));
               } else {
                 // Fallback for case-insensitivity during session restore
                 const allSnap = await getDocs(collection(db, 'accounts'));
@@ -424,6 +427,7 @@ export default function App() {
                   const updatedUser = { username: docMatch.data().username, role: docMatch.data().role, uid: docMatch.id };
                   setUser(updatedUser);
                   localStorage.setItem('isman_user', JSON.stringify(updatedUser));
+                  sessionStorage.setItem('isman_user', JSON.stringify(updatedUser));
                   // Silently update legacy active account to save username_lowercase
                   try {
                     await setDoc(doc(db, 'accounts', docMatch.id), { username_lowercase: parsed.username.toLowerCase() }, { merge: true });
@@ -432,6 +436,7 @@ export default function App() {
                   // Account does not exist in the database, clear session gracefully
                   setUser(null);
                   localStorage.removeItem('isman_user');
+                  sessionStorage.removeItem('isman_user');
                 }
               }
             } catch (bgError) {
@@ -442,6 +447,7 @@ export default function App() {
         } catch (e) {
           setUser(null);
           localStorage.removeItem('isman_user');
+          sessionStorage.removeItem('isman_user');
           setLoading(false);
         }
       } else {
@@ -1556,6 +1562,7 @@ export default function App() {
       
       const u = { username: userData.username, role: role, uid: userData.uid };
       localStorage.setItem('isman_user', JSON.stringify(u));
+      sessionStorage.setItem('isman_user', JSON.stringify(u));
       setUser(u);
     }
   };
@@ -1570,8 +1577,11 @@ export default function App() {
     } catch (error) {
       console.error("Logout error:", error);
     }
-    // Always clear local state regardless of Firebase auth state
-    localStorage.removeItem('isman_user');
+    // Always clear local and session state regardless of Firebase auth state
+    try {
+      sessionStorage.removeItem('isman_user');
+      localStorage.removeItem('isman_user');
+    } catch (_) {}
     setUser(null);
     setViewingUser(null);
     setSelectedRiskType(null); // Reset risk type to force role selection correctly on next manual login
