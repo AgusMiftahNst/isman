@@ -121,7 +121,7 @@ export const isPPBRAdminUser = (userObj?: any): boolean => {
     return check(userObj);
   }
   try {
-    const saved = localStorage.getItem('isman_user');
+    const saved = sessionStorage.getItem('isman_user') || localStorage.getItem('isman_user');
     if (saved) {
       return check(JSON.parse(saved));
     }
