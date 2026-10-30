@@ -10,7 +10,6 @@ import {
   Search,
   Plus,
   Trash2,
-  Copy,
   FileSpreadsheet,
   FileText,
   RotateCcw,
@@ -363,12 +362,12 @@ export const normalizeAuditUniverseData = (
     const canon = programCanonicalMap.get(prog);
     if (!canon) return;
 
-    // HANYA wariskan OPD/Irban jika baris tersebut memang belum diisi sama sekali (jangan menimpa input atau penghapusan teks oleh user)
-    if (canon.opdPengampu && (!item.opdPengampu || !item.opdPengampu.trim())) {
+    // OPD dan Irban melekat pada Program RPJMD: Sinkronkan ke seluruh baris indikator dalam program yang sama
+    if (canon.opdPengampu && (item.opdPengampu || '').trim() !== canon.opdPengampu) {
       item.opdPengampu = canon.opdPengampu;
       hasChanges = true;
     }
-    if (canon.irbanPengampu && (!item.irbanPengampu || !item.irbanPengampu.trim())) {
+    if (canon.irbanPengampu && (item.irbanPengampu || '').trim() !== canon.irbanPengampu) {
       item.irbanPengampu = canon.irbanPengampu;
       hasChanges = true;
     }
@@ -964,16 +963,22 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
   const handleCellChange = (id: string, field: keyof AuditUniverseItem, value: any) => {
     let detectedOpdName: string | null = null;
     const targetItem = data.find(d => d.id === id);
+    const targetProg = (targetItem?.programRpjmd || '').trim().toLowerCase();
     const targetOpd = (targetItem?.opdPengampu || '').trim().toLowerCase();
+    
+    // OPD dan Irban melekat erat pada Program RPJMD:
+    // Jika field opdPengampu atau irbanPengampu diubah, perbarui SEMUA baris dalam program RPJMD yang sama
+    const isProgramBoundField = (field === 'opdPengampu' || field === 'irbanPengampu' || field === 'tujuanSasaranRenstra' || field === 'indikatorRenstra') && Boolean(targetProg);
     const isOpdLevelField = (field === 'irbanPengampu') && Boolean(targetOpd);
     const cleanVal = field === 'anggaran' ? Number(value) || 0 : value;
 
     const affectedIds: string[] = [];
     const updated = data.map(item => {
       const matchId = item.id === id;
+      const matchProg = isProgramBoundField && (item.programRpjmd || '').trim().toLowerCase() === targetProg;
       const matchOpd = isOpdLevelField && (item.opdPengampu || '').trim().toLowerCase() === targetOpd;
 
-      if (matchId || matchOpd) {
+      if (matchId || matchProg || matchOpd) {
         affectedIds.push(item.id);
         const next: AuditUniverseItem = {
           ...item,
@@ -1011,7 +1016,7 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
     const timer = setTimeout(async () => {
       try {
         const nowIso = new Date().toISOString();
-        if (isOpdLevelField && affectedIds.length > 1) {
+        if ((isProgramBoundField || isOpdLevelField) && affectedIds.length > 1) {
           const batch = writeBatch(db);
           affectedIds.forEach(affId => {
             batch.set(doc(db, rowCollectionName, affId), {
@@ -1051,9 +1056,17 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
   ) => {
     const idsToUpdate = Array.from(new Set(groupIndices.map(idx => filteredData[idx]?.id).filter(Boolean)));
     const cleanVal = field === 'anggaran' ? Number(value) || 0 : value;
-    const isOpdLevelField = (field === 'tujuanSasaranRenstra' || field === 'indikatorRenstra' || field === 'irbanPengampu' || field === 'opdPengampu');
+    const isProgramBoundField = (field === 'opdPengampu' || field === 'irbanPengampu' || field === 'tujuanSasaranRenstra' || field === 'indikatorRenstra');
+    
+    // Kumpulkan nama program yang tercakup dalam group indices
+    const affectedProgNames = new Set(
+      groupIndices
+        .map(idx => (filteredData[idx]?.programRpjmd || '').trim().toLowerCase())
+        .filter(Boolean)
+    );
+
     let targetOpd = '';
-    if (isOpdLevelField && groupIndices.length > 0) {
+    if (groupIndices.length > 0) {
       targetOpd = (filteredData[groupIndices[0]]?.opdPengampu || '').trim().toLowerCase();
     }
 
@@ -1061,9 +1074,10 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
     const affectedIds: string[] = [];
     const updated = data.map(item => {
       const matchId = idsSet.has(item.id);
-      const matchOpd = isOpdLevelField && Boolean(targetOpd) && (item.opdPengampu || '').trim().toLowerCase() === targetOpd;
+      const matchProg = isProgramBoundField && affectedProgNames.size > 0 && affectedProgNames.has((item.programRpjmd || '').trim().toLowerCase());
+      const matchOpd = isProgramBoundField && Boolean(targetOpd) && (item.opdPengampu || '').trim().toLowerCase() === targetOpd;
 
-      if (matchId || matchOpd) {
+      if (matchId || matchProg || matchOpd) {
         affectedIds.push(item.id);
         return {
           ...item,
@@ -1295,6 +1309,14 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
     afterIndex: number
   ) => {
     const targetItem = filteredData[afterIndex];
+    // Pastikan OPD dan Irban selalu melekat dari program yang sama
+    const existingProgramRow = data.find(d => 
+      (d.programRpjmd || '').trim().toLowerCase() === (program || '').trim().toLowerCase() && 
+      (d.opdPengampu || '').trim()
+    );
+    const resolvedOpd = (opd || targetItem?.opdPengampu || existingProgramRow?.opdPengampu || '').trim();
+    const resolvedIrban = (irban || targetItem?.irbanPengampu || existingProgramRow?.irbanPengampu || defaultNewRowIrban).trim();
+
     const newRow: AuditUniverseItem = {
       id: `au-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       no: data.length + 1,
@@ -1304,8 +1326,8 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
       indikatorSasaranRpjmd: indSasaran || '',
       programRpjmd: program,
       indikatorProgramRpjmd: '',
-      opdPengampu: opd,
-      irbanPengampu: irban || targetItem?.irbanPengampu || defaultNewRowIrban,
+      opdPengampu: resolvedOpd,
+      irbanPengampu: resolvedIrban,
       tujuanSasaranRenstra: targetItem?.tujuanSasaranRenstra || '',
       indikatorRenstra: targetItem?.indikatorRenstra || '',
       programRenstra: targetItem?.programRenstra || '',
@@ -1444,33 +1466,23 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
     handleSaveData(updated);
   };
 
-  // Duplicate a row
-  const handleDuplicateRow = (item: AuditUniverseItem) => {
-    const duplicate: AuditUniverseItem = {
-      ...item,
-      id: `au-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      no: data.length + 1
-    };
-    const updated = [...data, duplicate];
-    handleSaveData(updated);
-  };
-
-  // Request Delete row with confirmation dialog
+  // Request Delete 1 single row with confirmation dialog
   const requestDeleteRow = (item: AuditUniverseItem) => {
+    const indicatorName = item.indikatorProgramRpjmd || item.indikatorProgramRenstra;
     const programName = item.programRpjmd || item.programRenstra || `Baris No. ${item.no}`;
     setConfirmModal({
       isOpen: true,
-      title: 'Hapus Baris Program?',
-      message: `Apakah Anda yakin ingin menghapus baris program ini dari tabel Audit Universe? Data pada baris ini akan dihapus secara permanen.`,
+      title: 'Hapus 1 Baris Ini Saja?',
+      message: `Apakah Anda yakin ingin menghapus 1 baris ini saja (Baris No. ${item.no}${indicatorName ? ` - "${indicatorName}"` : ''})? Baris indikator lain pada program ini TIDAK akan terhapus.`,
       detail: `Program: "${programName}" ${item.opdPengampu ? `| OPD: ${item.opdPengampu}` : ''} ${item.irbanPengampu ? `| Irban: ${item.irbanPengampu}` : ''}`,
-      confirmText: 'Ya, Hapus Baris',
+      confirmText: 'Ya, Hapus 1 Baris Ini',
       variant: 'danger',
       onConfirm: () => {
         deletedRowIdsRef.current.add(item.id);
         const updated = data
           .filter(d => d.id !== item.id)
           .map((d, idx) => ({ ...d, no: idx + 1 }));
-        handleSaveData(updated, true, `Menghapus baris program: "${programName}"`);
+        handleSaveData(updated, true, `Menghapus 1 baris: "${indicatorName || programName}"`);
       }
     });
   };
@@ -1623,47 +1635,25 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
       };
     }
 
-    // 1. OPD Span: Menggabungkan baris dengan OPD yang sama yang berurutan
-    let oStart = 0;
-    while (oStart < filteredData.length) {
-      const curOpd = (filteredData[oStart].opdPengampu || '').trim();
-      let oEnd = oStart + 1;
-      const oList = [oStart];
-
-      if (curOpd !== '') {
-        while (
-          oEnd < filteredData.length &&
-          (filteredData[oEnd].opdPengampu || '').trim().toLowerCase() === curOpd.toLowerCase()
-        ) {
-          oList.push(oEnd);
-          oEnd++;
-        }
-      }
-
-      const oSpanVal = oEnd - oStart;
-      opdSpan[oStart] = oSpanVal;
-      opdIndices[oStart] = oList;
-
-      for (let ok = oStart + 1; ok < oEnd; ok++) {
-        opdSpan[ok] = 0; // mark as hidden
-      }
-
-      oStart = oEnd;
-    }
-
-    // 2. Program Span: Menggabungkan Program RPJMD & Renstra yang sama dan OPD yang sama
+    // 1. Program RPJMD & OPD Spans:
+    // Sesuai aturan: OPD melekat erat pada Program RPJMD.
+    // Berapa pun jumlah indikator dalam 1 Program RPJMD, kolom Program dan OPD tetap ter-merge 1 cell yang sama!
     let pStart = 0;
     while (pStart < filteredData.length) {
       const curProg = (filteredData[pStart].programRpjmd || '').trim();
-      const curOpd = (filteredData[pStart].opdPengampu || '').trim().toLowerCase();
+      const curTujuan = (filteredData[pStart].tujuanRpjmd || '').trim();
+      const curSasaran = (filteredData[pStart].sasaranRpjmd || '').trim();
+      const curIndSasaran = (filteredData[pStart].indikatorSasaranRpjmd || '').trim();
       let pEnd = pStart + 1;
       const pList = [pStart];
 
       if (curProg !== '') {
         while (
           pEnd < filteredData.length &&
-          (filteredData[pEnd].programRpjmd || '').trim() === curProg &&
-          (filteredData[pEnd].opdPengampu || '').trim().toLowerCase() === curOpd
+          (filteredData[pEnd].programRpjmd || '').trim().toLowerCase() === curProg.toLowerCase() &&
+          (!curTujuan || (filteredData[pEnd].tujuanRpjmd || '').trim() === curTujuan) &&
+          (!curSasaran || (filteredData[pEnd].sasaranRpjmd || '').trim() === curSasaran) &&
+          (!curIndSasaran || (filteredData[pEnd].indikatorSasaranRpjmd || '').trim() === curIndSasaran)
         ) {
           pList.push(pEnd);
           pEnd++;
@@ -1674,8 +1664,13 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
       programSpan[pStart] = pSpanVal;
       programIndices[pStart] = pList;
 
+      // OPD melekat pada Program RPJMD: Berapa pun indikator bertambah, OPD tetap kemerge bersama Program
+      opdSpan[pStart] = pSpanVal;
+      opdIndices[pStart] = pList;
+
       for (let pk = pStart + 1; pk < pEnd; pk++) {
         programSpan[pk] = 0;
+        opdSpan[pk] = 0;
       }
 
       pStart = pEnd;
@@ -2239,7 +2234,7 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
                 <th rowSpan={2} className="p-3 font-semibold min-w-[220px] text-center border-r border-b border-slate-700 bg-slate-900">
                   Isu Terkini
                 </th>
-                <th rowSpan={2} className="p-3 font-semibold w-24 text-center border-b border-slate-700 sticky right-0 z-30 bg-slate-900">
+                <th rowSpan={2} className="p-3 font-semibold min-w-[80px] text-center border-b border-slate-700 sticky right-0 z-30 bg-slate-900">
                   Aksi
                 </th>
               </tr>
@@ -2602,16 +2597,14 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
                             placeholder="Indikator Program..."
                             className="w-full p-2 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-blue-500 rounded-md text-xs resize-y focus:outline-hidden transition leading-relaxed text-slate-800"
                           />
-                          {progSpan > 1 && (
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteIndicatorRow(item)}
-                              className="p-1 text-slate-300 hover:text-rose-600 rounded transition opacity-0 group-hover:opacity-100 shrink-0 mt-1"
-                              title="Hapus baris indikator ini saja"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          )}
+                          <button
+                            type="button"
+                            onClick={() => requestDeleteRow(item)}
+                            className="p-1 text-slate-300 hover:text-rose-600 hover:bg-rose-50 rounded transition opacity-0 group-hover:opacity-100 shrink-0 mt-1"
+                            title="Hapus 1 baris ini saja"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
                         </div>
                       </td>
 
@@ -2661,7 +2654,7 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
                             })()}
                             {opdSpan > 1 && (
                               <span className="text-[10px] text-teal-800 font-semibold px-1.5 py-0.5 bg-teal-50 border border-teal-200 rounded inline-block mt-0.5 self-start shadow-2xs">
-                                1 OPD ({opdSpan} Baris)
+                                1 OPD ({opdSpan} Indikator)
                               </span>
                             )}
                           </div>
@@ -3023,54 +3016,56 @@ export const AuditUniverseView: React.FC<AuditUniverseViewProps> = ({ isAdmin: i
                         </td>
                       )}
 
-                      {/* Aksi (Merged with Program) */}
-                      {showProgram && (
-                        <td
-                          rowSpan={progSpan}
-                          className="p-2 text-center sticky right-0 z-10 bg-white border-l border-slate-200 align-top"
-                        >
-                          <div className="flex flex-col items-center justify-center gap-1.5">
+                      {/* Aksi (Tersedia untuk setiap baris: ramping & estetis) */}
+                      <td className="p-1.5 text-center sticky right-0 z-10 bg-white border-l border-slate-200 align-middle">
+                        <div className="flex items-center justify-center gap-0.5">
+                          {/* Tombol Hapus 1 Baris Saja (Ukuran kecil, ramping & estetis) */}
+                          <button
+                            type="button"
+                            onClick={() => requestDeleteRow(item)}
+                            className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition"
+                            title={`Hapus 1 baris ini (Baris No. ${index + 1})`}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+
+                          {/* Tombol Tambah Indikator Baru di Bawah Program Ini */}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleAddIndikatorUnderProgram(
+                                item.tujuanRpjmd || '',
+                                item.sasaranRpjmd || '',
+                                item.indikatorSasaranRpjmd || '',
+                                item.indikatorTujuanRpjmd || '',
+                                item.programRpjmd || '',
+                                item.opdPengampu || '',
+                                item.irbanPengampu || '',
+                                index
+                              )
+                            }
+                            className="p-1 text-slate-400 hover:text-teal-600 hover:bg-teal-50 rounded transition"
+                            title="Tambah Indikator Program baru"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                          </button>
+
+                          {/* Opsi Hapus Seluruh Program jika program ini memiliki banyak baris */}
+                          {progIndices.length > 1 && showProgram && (
                             <button
+                              type="button"
                               onClick={() =>
-                                handleAddIndikatorUnderProgram(
-                                  item.tujuanRpjmd || '',
-                                  item.sasaranRpjmd || '',
-                                  item.indikatorSasaranRpjmd || '',
-                                  item.indikatorTujuanRpjmd || '',
-                                  item.programRpjmd || '',
-                                  item.opdPengampu || '',
-                                  item.irbanPengampu || '',
-                                  index + progSpan - 1
-                                )
+                                requestDeleteProgram(progIndices, item.programRpjmd || item.programRenstra || `Program`)
                               }
-                              className="p-1.5 text-slate-500 hover:text-teal-700 hover:bg-teal-50 rounded-md transition border border-transparent hover:border-teal-200"
-                              title="Tambah Indikator Program baru"
+                              className="px-1.5 py-0.5 text-[9px] text-rose-600 hover:text-rose-800 hover:bg-rose-50 border border-rose-200 rounded transition flex items-center gap-0.5 font-medium"
+                              title={`Hapus seluruh program beserta seluruh (${progIndices.length}) baris indikator di dalamnya`}
                             >
-                              <Plus className="w-4 h-4 text-teal-600" />
+                              <Layers className="w-2.5 h-2.5 text-rose-500" />
+                              <span>Semua</span>
                             </button>
-                            <button
-                              onClick={() => handleDuplicateRow(item)}
-                              className="p-1.5 text-slate-500 hover:text-indigo-700 hover:bg-indigo-50 rounded-md transition border border-transparent hover:border-indigo-200"
-                              title="Duplikasi baris program ini"
-                            >
-                              <Copy className="w-4 h-4" />
-                            </button>
-                            <button
-                              onClick={() => {
-                                if (progSpan > 1) {
-                                  requestDeleteProgram(progIndices, item.programRpjmd || item.programRenstra || `Program`);
-                                } else {
-                                  requestDeleteRow(item);
-                                }
-                              }}
-                              className="p-1.5 text-slate-500 hover:text-rose-700 hover:bg-rose-50 rounded-md transition border border-transparent hover:border-rose-200"
-                              title={progSpan > 1 ? `Hapus seluruh program (${progSpan} indikator)` : 'Hapus baris'}
-                            >
-                              <Trash2 className="w-4 h-4 text-rose-500" />
-                            </button>
-                          </div>
-                        </td>
-                      )}
+                          )}
+                        </div>
+                      </td>
                     </tr>
                   );
                 })
